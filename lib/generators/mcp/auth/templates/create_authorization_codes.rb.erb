@@ -1,0 +1,20 @@
+class CreateMcpAuthAuthorizationCodes < ActiveRecord::Migration<%= migration_version %>
+  def change
+    create_table :mcp_auth_authorization_codes do |t|
+      t.string :code, null: false, index: { unique: true }
+      t.string :client_id, null: false
+      t.string :redirect_uri, null: false
+      t.string :code_challenge
+      t.string :code_challenge_method
+      t.string :resource
+      t.string :scope
+      t.references :user, foreign_key: true
+      t.references :org, foreign_key: true, optional: true
+      t.datetime :expires_at, null: false
+      t.timestamps
+    end
+
+    add_index :mcp_auth_authorization_codes, :client_id
+    add_index :mcp_auth_authorization_codes, :expires_at
+  end
+end

@@ -1,0 +1,55 @@
+FILES TO CREATE - Copy from Claude artifacts:
+
+Root Files:
+1. mcp-auth.gemspec
+2. README.md
+3. LICENSE.txt
+4. CHANGELOG.md
+5. CONTRIBUTING.md
+6. .gitignore
+7. .rspec
+
+Lib Files:
+8. lib/mcp/auth/version.rb
+9. lib/mcp/auth/engine.rb
+10. lib/mcp/auth.rb
+
+Services:
+11. lib/mcp/auth/services/token_service.rb
+12. lib/mcp/auth/services/authorization_service.rb
+
+Middleware:
+13. lib/mcp/auth/middleware/mcp_headers_middleware.rb
+
+Models:
+14. app/models/mcp/auth/oauth_client.rb
+15. app/models/mcp/auth/authorization_code.rb
+16. app/models/mcp/auth/access_token.rb
+17. app/models/mcp/auth/refresh_token.rb
+
+Controllers:
+18. app/controllers/mcp/auth/oauth_controller.rb
+19. app/controllers/mcp/auth/well_known_controller.rb
+
+Views:
+20. app/views/mcp/auth/consent.html.erb
+
+Routes:
+21. config/routes.rb
+
+Generator:
+22. lib/generators/mcp/auth/install_generator.rb
+
+Templates:
+23. lib/generators/mcp/auth/templates/create_oauth_clients.rb.erb
+24. lib/generators/mcp/auth/templates/create_authorization_codes.rb.erb
+25. lib/generators/mcp/auth/templates/create_access_tokens.rb.erb
+26. lib/generators/mcp/auth/templates/create_refresh_tokens.rb.erb
+27. lib/generators/mcp/auth/templates/initializer.rb
+28. lib/generators/mcp/auth/templates/README
+
+Rake Tasks:
+29. lib/tasks/mcp_auth_tasks.rake
+
+Tests:
+30. spec/services/token_service_spec.rb
