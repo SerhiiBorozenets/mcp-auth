@@ -2,112 +2,210 @@
 
 ```
 mcp-auth/
-├── app/
-│   ├── controllers/
-│   │   └── mcp/
-│   │       └── auth/
-│   │           ├── oauth_controller.rb          # OAuth 2.1 endpoints
-│   │           └── well_known_controller.rb     # Discovery endpoints
-│   ├── models/
-│   │   └── mcp/
-│   │       └── auth/
-│   │           ├── access_token.rb              # Access token model
-│   │           ├── authorization_code.rb        # Authorization code model
-│   │           ├── oauth_client.rb              # OAuth client model
-│   │           └── refresh_token.rb             # Refresh token model
-│   └── views/
-│       └── mcp/
-│           └── auth/
-│               └── consent.html.erb             # OAuth consent screen
-├── config/
-│   └── routes.rb                                 # Engine routes
+│
+├── Root Files
+│   ├── mcp-auth.gemspec                     # Gem specification
+│   ├── Gemfile                              # Development dependencies
+│   ├── README.md                            # Main documentation
+│   ├── LICENSE.txt                          # MIT License
+│   ├── CHANGELOG.md                         # Version history
+│   ├── CONTRIBUTING.md                      # Contribution guidelines
+│   ├── DIRECTORY_STRUCTURE.md               # This file
+│   ├── .gitignore                           # Git ignore rules
+│   ├── .rspec                               # RSpec configuration
+│   └── .rubocop.yml                         # RuboCop linting rules
+│
 ├── lib/
+│   ├── mcp/
+│   │   ├── auth.rb                          # Main module loader
+│   │   └── auth/
+│   │       ├── version.rb                   # Gem version (0.1.0)
+│   │       ├── engine.rb                    # Rails engine configuration
+│   │       │
+│   │       ├── middleware/
+│   │       │   └── mcp_headers_middleware.rb    # Request authentication middleware
+│   │       │
+│   │       └── services/
+│   │           ├── token_service.rb             # JWT generation & validation
+│   │           └── authorization_service.rb     # Authorization code & PKCE logic
+│   │
 │   ├── generators/
 │   │   └── mcp/
 │   │       └── auth/
-│   │           ├── install_generator.rb         # Installation generator
+│   │           ├── install_generator.rb         # Rails generator
 │   │           └── templates/
-│   │               ├── create_access_tokens.rb.erb
-│   │               ├── create_authorization_codes.rb.erb
-│   │               ├── create_oauth_clients.rb.erb
-│   │               ├── create_refresh_tokens.rb.erb
-│   │               ├── initializer.rb           # Initializer template
-│   │               └── README                   # Post-install instructions
-│   ├── mcp/
-│   │   ├── auth/
-│   │   │   ├── engine.rb                        # Rails engine
-│   │   │   ├── middleware/
-│   │   │   │   └── mcp_headers_middleware.rb   # Request authentication
-│   │   │   ├── services/
-│   │   │   │   ├── authorization_service.rb    # Authorization code logic
-│   │   │   │   └── token_service.rb            # Token generation/validation
-│   │   │   └── version.rb                       # Gem version
-│   │   └── auth.rb                              # Main module file
+│   │               ├── README                   # Post-install instructions
+│   │               ├── initializer.rb           # Configuration template
+│   │               │
+│   │               ├── Migration Templates
+│   │               ├── create_oauth_clients.rb.erb          # OAuth clients table
+│   │               ├── create_authorization_codes.rb.erb    # Auth codes table
+│   │               ├── create_access_tokens.rb.erb          # Access tokens table
+│   │               ├── create_refresh_tokens.rb.erb         # Refresh tokens table
+│   │               │
+│   │               └── views/
+│   │                   └── consent.html.erb     # OAuth consent screen template
+│   │
 │   └── tasks/
-│       └── mcp_auth_tasks.rake                  # Rake tasks
-├── spec/
-│   ├── factories/                               # Test factories
-│   ├── services/
-│   │   └── token_service_spec.rb                # Service tests
-│   └── spec_helper.rb                           # RSpec configuration
-├── .gitignore                                    # Git ignore rules
-├── .rspec                                        # RSpec configuration
-├── .rubocop.yml                                  # RuboCop configuration
-├── CHANGELOG.md                                  # Version history
-├── CONTRIBUTING.md                               # Contribution guidelines
-├── Gemfile                                       # Gem dependencies
-├── LICENSE.txt                                   # MIT License
-├── README.md                                     # Main documentation
-└── mcp-auth.gemspec                             # Gem specification
+│       └── mcp_auth_tasks.rake              # Rake tasks (cleanup, stats, revoke)
+│
+├── app/
+│   ├── models/
+│   │   └── mcp/
+│   │       └── auth/
+│   │           ├── oauth_client.rb          # OAuth 2.1 client registrations
+│   │           ├── authorization_code.rb    # Short-lived auth codes with PKCE
+│   │           ├── access_token.rb          # JWT access tokens
+│   │           └── refresh_token.rb         # Long-lived refresh tokens
+│   │
+│   ├── controllers/
+│   │   └── mcp/
+│   │       └── auth/
+│   │           ├── oauth_controller.rb      # OAuth 2.1 flow endpoints
+│   │           │                            # - /oauth/authorize
+│   │           │                            # - /oauth/approve
+│   │           │                            # - /oauth/token
+│   │           │                            # - /oauth/register (RFC 7591)
+│   │           │                            # - /oauth/revoke (RFC 7009)
+│   │           │                            # - /oauth/introspect (RFC 7662)
+│   │           │                            # - /oauth/userinfo (OpenID Connect)
+│   │           │
+│   │           └── well_known_controller.rb # Discovery endpoints
+│   │                                        # - /.well-known/oauth-protected-resource
+│   │                                        # - /.well-known/oauth-authorization-server
+│   │                                        # - /.well-known/openid-configuration
+│   │                                        # - /.well-known/jwks.json
+│   │
+│   └── views/
+│       └── mcp/
+│           └── auth/
+│               └── consent.html.erb         # OAuth consent screen (self-contained)
+│
+├── config/
+│   └── routes.rb                            # Engine routes configuration
+│
+└── spec/                                    # Test suite (optional)
+├── services/
+│   ├── token_service_spec.rb
+│   └── authorization_service_spec.rb
+├── models/
+│   ├── oauth_client_spec.rb
+│   ├── authorization_code_spec.rb
+│   ├── access_token_spec.rb
+│   └── refresh_token_spec.rb
+└── factories/
+└── oauth_factories.rb
 ```
 
 ## Key Components
 
-### Models (`app/models/mcp/auth/`)
-- **OauthClient**: Registered OAuth 2.1 clients with credentials
-- **AuthorizationCode**: Short-lived authorization codes with PKCE
-- **AccessToken**: JWT access tokens for API access
-- **RefreshToken**: Long-lived tokens for obtaining new access tokens
+### Core Engine (`lib/mcp/auth/`)
 
-### Controllers (`app/controllers/mcp/auth/`)
-- **OauthController**: Handles OAuth 2.1 flow (authorize, token, etc.)
-- **WellKnownController**: Provides discovery metadata endpoints
+**engine.rb**
+- Rails engine configuration
+- Middleware registration
+- Configuration initialization
+
+**version.rb**
+- Current version: 0.1.0
 
 ### Services (`lib/mcp/auth/services/`)
-- **TokenService**: JWT generation, validation, and management
-- **AuthorizationService**: Authorization code and PKCE handling
+
+**token_service.rb**
+- JWT access token generation with HS256
+- Token validation with audience checking (RFC 8707)
+- Refresh token generation and rotation
+- Token revocation support
+
+**authorization_service.rb**
+- Authorization code generation with PKCE
+- Code validation and consumption (one-time use)
+- PKCE challenge verification (S256 method)
 
 ### Middleware (`lib/mcp/auth/middleware/`)
-- **McpHeadersMiddleware**: Authenticates requests to `/mcp/api/*`
+
+**mcp_headers_middleware.rb**
+- Protects all `/mcp/api/*` routes
+- Bearer token authentication (RFC 6750)
+- WWW-Authenticate header on 401 (RFC 9728)
+- CORS support for OPTIONS requests
+
+### Models (`app/models/mcp/auth/`)
+
+**oauth_client.rb**
+- OAuth 2.1 client registrations
+- Dynamic client registration (RFC 7591)
+- Redirect URI validation
+- Grant type support
+
+**authorization_code.rb**
+- Short-lived codes (30 min default)
+- PKCE challenge storage
+- Resource indicator support (RFC 8707)
+- Auto-cleanup of expired codes
+
+**access_token.rb**
+- JWT storage for revocation
+- Active/expired scopes
+- Resource binding
+- 1 hour lifetime (configurable)
+
+**refresh_token.rb**
+- 30 day lifetime (configurable)
+- Token rotation on use (OAuth 2.1)
+- Revocation support
+
+### Controllers (`app/controllers/mcp/auth/`)
+
+**oauth_controller.rb**
+- Authorization endpoint with PKCE requirement
+- Token endpoint (authorization_code, refresh_token grants)
+- Dynamic client registration (RFC 7591)
+- Token revocation (RFC 7009)
+- Token introspection (RFC 7662)
+- UserInfo endpoint (OpenID Connect)
+- Consent screen rendering
+
+**well_known_controller.rb**
+- Protected Resource Metadata (RFC 9728)
+- Authorization Server Metadata (RFC 8414)
+- OpenID Connect Discovery
+- JWKS endpoint
 
 ### Views (`app/views/mcp/auth/`)
-- **consent.html.erb**: User consent screen for OAuth authorization
 
-## Installation Files
+**consent.html.erb**
+- Self-contained HTML with inline CSS
+- No layout dependency
+- Customizable via generator
+- Responsive design
 
-The gem provides an install generator that creates:
+### Generator (`lib/generators/mcp/auth/`)
 
-1. **Migrations**: Four migration files for the database tables
-2. **Initializer**: Configuration file at `config/initializers/mcp_auth.rb`
-3. **README**: Post-installation instructions
+**install_generator.rb**
+- Creates 4 database migrations
+- Copies initializer with configuration options
+- Copies consent view template
+- Shows post-install instructions
 
-## Configuration
+**Templates:**
+- Migration files for all OAuth tables
+- Initializer with comprehensive configuration
+- Consent view for customization
+- README with setup instructions
 
-Configuration is done through `Mcp::Auth.configure` block:
+### Routes (`config/routes.rb`)
 
-```ruby
-Mcp::Auth.configure do |config|
-  config.oauth_secret = ENV['MCP_OAUTH_PRIVATE_KEY']
-  config.access_token_lifetime = 3600
-  config.fetch_user_data = proc { |user_id, org_id| ... }
-end
-```
+Automatically provides:
+- `/.well-known/*` discovery endpoints
+- `/oauth/*` authorization endpoints
+- CORS support for all endpoints
 
-## Rake Tasks
+### Rake Tasks (`lib/tasks/mcp_auth_tasks.rake`)
 
-Located in `lib/tasks/mcp_auth_tasks.rake`:
-
-- `mcp_auth:cleanup` - Remove expired tokens
-- `mcp_auth:stats` - Show token statistics
-- `mcp_auth:revoke_client_tokens[client_id]` - Revoke client tokens
-- `mcp_auth:revoke_user_tokens[user_id]` - Revoke user tokens
+**Available tasks:**
+```bash
+rake mcp_auth:cleanup                    # Remove expired tokens
+rake mcp_auth:stats                      # Show token statistics
+rake mcp_auth:revoke_client_tokens[id]   # Revoke all client tokens
+rake mcp_auth:revoke_user_tokens[id]     # Revoke all user tokens

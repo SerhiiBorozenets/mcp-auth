@@ -24,7 +24,9 @@ module Mcp
                     :authorization_code_lifetime,
                     :fetch_user_data,
                     :current_user_method,
-                    :current_org_method
+                    :current_org_method,
+                    :consent_view_path,
+                    :use_custom_consent_view
 
       def initialize
         @oauth_secret = nil
@@ -35,6 +37,8 @@ module Mcp
         @fetch_user_data = nil
         @current_user_method = :current_user
         @current_org_method = :current_org
+        @consent_view_path = 'mcp/auth/consent'
+        @use_custom_consent_view = false
       end
     end
 

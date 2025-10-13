@@ -1,0 +1,114 @@
+===============================================================================
+
+MCP Auth has been installed!
+
+Next steps:
+
+1. Run the migrations:
+
+   rails db:migrate
+
+2. Configure the initializer at config/initializers/mcp_auth.rb
+
+   Set your OAuth secret and customize user data fetching.
+
+3. Ensure your ApplicationController has authentication methods:
+
+    - current_user: returns the currently signed-in user
+    - current_org: returns the current organization (optional)
+    - user_signed_in?: returns true if user is signed in
+
+4. Set environment variables (optional):
+
+   MCP_OAUTH_PRIVATE_KEY: Secret key for signing JWTs
+   MCP_AUTHORIZATION_SERVER_URL: Custom authorization server URL
+
+5. Your OAuth endpoints are now available at:
+
+    - /.well-known/oauth-protected-resource (Protected Resource Metadata)
+    - /.well-known/oauth-authorization-server (Authorization Server Metadata)
+    - /oauth/authorize (Authorization endpoint)
+    - /oauth/token (Token endpoint)
+    - /oauth/register (Dynamic client registration)
+    - /oauth/revoke (Token revocation)
+    - /oauth/introspect (Token introspection)
+
+6. Mount the routes in your config/routes.rb:
+
+   Rails.application.routes.draw do
+   # Mount MCP Auth routes at the top
+   mount Mcp::Auth::Engine => "/"
+
+   # ... your other routes
+   end
+
+CUSTOMIZING THE CONSENT SCREEN
+-------------------------------
+
+The generator has created a default consent view at:
+app/views/mcp/auth/consent.html.erb
+
+To use your custom consent view:
+
+1. Edit config/initializers/mcp_auth.rb and set:
+   config.use_custom_consent_view = true
+
+2. Customize app/views/mcp/auth/consent.html.erb to match your branding
+
+3. Available instance variables in the view:
+   @client_name - Name of the OAuth client requesting access
+   @requested_scopes - Array of human-readable permission descriptions
+   @authorization_params - Hash containing OAuth flow parameters
+
+4. The form must POST to oauth_approve_path with:
+    - All @authorization_params as hidden fields
+    - A button with name="approved" value="true" for approval
+    - A button with name="approved" value="false" for denial
+
+Example form:
+<%= form_with url: oauth_approve_path, method: :post do |f| %>
+<% @authorization_params.each do |key, value| %>
+<%= f.hidden_field key, value: value, id: nil %>
+<% end %>
+<%= f.button 'Deny', name: 'approved', value: 'false' %>
+<%= f.button 'Authorize', name: 'approved', value: 'true' %>
+<% end %>
+
+TESTING THE OAUTH FLOW
+-----------------------
+
+1. Start your Rails server:
+   rails server
+
+2. Test the discovery endpoints:
+   curl http://localhost:3000/.well-known/oauth-protected-resource
+   curl http://localhost:3000/.well-known/oauth-authorization-server
+
+3. Register a test client:
+   curl -X POST http://localhost:3000/oauth/register \
+   -H "Content-Type: application/json" \
+   -d '{
+   "client_name": "Test Client",
+   "redirect_uris": ["http://localhost:3000/callback"]
+     }'
+
+4. Use the returned client_id and client_secret for OAuth flow
+
+RAKE TASKS
+----------
+
+Clean up expired tokens:
+rake mcp_auth:cleanup
+
+Show statistics:
+rake mcp_auth:stats
+
+Revoke tokens for a client:
+rake mcp_auth:revoke_client_tokens[CLIENT_ID]
+
+Revoke tokens for a user:
+rake mcp_auth:revoke_user_tokens[USER_ID]
+
+For more information, see: https://github.com/SerhiiBorozenets/mcp-auth
+
+===============================================================================

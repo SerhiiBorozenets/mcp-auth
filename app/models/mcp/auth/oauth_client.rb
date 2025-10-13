@@ -6,6 +6,9 @@ module Mcp
       self.table_name = "mcp_auth_oauth_clients"
       self.primary_key = "client_id"
 
+      # Set defaults BEFORE validation
+      before_validation :set_defaults, on: :create
+
       validates :client_id, presence: true, uniqueness: true
       validates :client_secret, presence: true
 
@@ -30,8 +33,6 @@ module Mcp
                foreign_key: :client_id,
                primary_key: :client_id,
                dependent: :destroy
-
-      before_create :set_defaults
 
       def self.find_by_client_id(client_id)
         find_by(client_id: client_id)

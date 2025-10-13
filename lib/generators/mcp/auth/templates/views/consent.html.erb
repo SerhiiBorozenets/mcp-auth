@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <title>Authorization Request</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <%%= csrf_meta_tags %>
+
+  <style>
+      * {
+          margin: 0;
+          padding: 0;
+          box-sizing: border-box;
+      }
+
+      body {
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          min-height: 100vh;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+      }
+
+      .container {
+          background: white;
+          border-radius: 12px;
+          box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+          max-width: 480px;
+          width: 100%;
+          overflow: hidden;
+      }
+
+      .header {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+          padding: 30px;
+          text-align: center;
+      }
+
+      .header h1 {
+          font-size: 24px;
+          font-weight: 600;
+          margin-bottom: 8px;
+      }
+
+      .header p {
+          font-size: 14px;
+          opacity: 0.9;
+      }
+
+      .content {
+          padding: 30px;
+      }
+
+      .client-info {
+          background: #f7fafc;
+          border-radius: 8px;
+          padding: 20px;
+          margin-bottom: 24px;
+          border-left: 4px solid #667eea;
+      }
+
+      .client-info strong {
+          display: block;
+          color: #2d3748;
+          font-size: 16px;
+          margin-bottom: 4px;
+      }
+
+      .client-info p {
+          color: #718096;
+          font-size: 14px;
+      }
+
+      .scopes {
+          margin-bottom: 24px;
+      }
+
+      .scopes h3 {
+          color: #2d3748;
+          font-size: 16px;
+          margin-bottom: 16px;
+          font-weight: 600;
+      }
+
+      .scope-item {
+          display: flex;
+          align-items: flex-start;
+          padding: 12px;
+          margin-bottom: 8px;
+          background: #f7fafc;
+          border-radius: 6px;
+          transition: background 0.2s;
+      }
+
+      .scope-item:hover {
+          background: #edf2f7;
+      }
+
+      .scope-icon {
+          flex-shrink: 0;
+          width: 20px;
+          height: 20px;
+          margin-right: 12px;
+          color: #667eea;
+      }
+
+      .scope-text {
+          color: #4a5568;
+          font-size: 14px;
+          line-height: 1.5;
+      }
+
+      .actions {
+          display: flex;
+          gap: 12px;
+          margin-top: 24px;
+      }
+
+      button {
+          flex: 1;
+          padding: 14px 24px;
+          border: none;
+          border-radius: 6px;
+          font-size: 15px;
+          font-weight: 600;
+          cursor: pointer;
+          transition: all 0.2s;
+          text-transform: none;
+      }
+
+      .btn-approve {
+          background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+          color: white;
+      }
+
+      .btn-approve:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+      }
+
+      .btn-deny {
+          background: #e2e8f0;
+          color: #4a5568;
+      }
+
+      .btn-deny:hover {
+          background: #cbd5e0;
+      }
+
+      .security-note {
+          margin-top: 24px;
+          padding: 16px;
+          background: #fef5e7;
+          border-radius: 6px;
+          font-size: 13px;
+          color: #975a16;
+          line-height: 1.5;
+      }
+
+      .security-note strong {
+          display: block;
+          margin-bottom: 4px;
+      }
+  </style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <h1>Authorization Request</h1>
+    <p>Review the permissions being requested</p>
+  </div>
+
+  <div class="content">
+    <div class="client-info">
+      <strong><%%= @client_name %></strong>
+      <p>wants to access your MCP server</p>
+    </div>
+
+    <div class="scopes">
+      <h3>This application will be able to:</h3>
+      <%% @requested_scopes.each do |scope| %>
+      <div class="scope-item">
+        <svg class="scope-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+        </svg>
+        <span class="scope-text"><%%= scope %></span>
+      </div>
+      <%% end %>
+    </div>
+
+    <%%= form_with url: oauth_approve_path, method: :post, local: true do |f| %>
+    <%% @authorization_params.each do |key, value| %>
+    <%%= f.hidden_field key, value: value, id: nil %>
+    <%% end %>
+
+    <div class="actions">
+      <%%= f.button 'Deny', type: 'submit', name: 'approved', value: 'false', class: 'btn-deny' %>
+      <%%= f.button 'Authorize', type: 'submit', name: 'approved', value: 'true', class: 'btn-approve' %>
+      <%% end %>
+    </div>
+
+    <div class="security-note">
+      <strong>Security Notice</strong>
+      By authorizing this application, you grant it access to your MCP server with the specified permissions. You can revoke access at any time from your account settings.
+    </div>
+  </div>
+</div>
+</body>
+</html>

@@ -19,7 +19,6 @@ OAuth 2.1 authorization for Model Context Protocol (MCP) servers in Rails applic
 ## Installation
 
 Add this line to your application's Gemfile:
-
 ```ruby
 gem 'mcp-auth'
 ```
@@ -43,14 +42,37 @@ gem install mcp-auth
 ```bash
 rails generate mcp:auth:install
 ```
+2. Mount the Routes
+   IMPORTANT: Add this to your config/routes.rb at the very top, before any other routes (especially before catch-all routes or devise):
 
-2. Run the migrations:
+```ruby
+Rails.application.routes.draw do
+  # Mount MCP Auth routes FIRST, before any catch-all routes
+  mount Mcp::Auth::Engine => '/'
+  
+  # Then your other routes
+  devise_for :users
+  root to: 'dashboard#index'
+  
+  # ... rest of your routes
+end
+```
+
+⚠️ Why at the top? The gem's routes (like /.well-known/oauth-* and /oauth/*) need to be registered before any catch-all routes or they'll be intercepted by your app's routing.
+
+3. Run the migrations:
 
 ```bash
 rails db:migrate
 ```
+This creates the following tables:
 
-3. Configure the initializer at `config/initializers/mcp_auth.rb`:
+* `mcp_auth_oauth_clients` - OAuth client registrations
+* `mcp_auth_authorization_codes` - Authorization codes with PKCE
+* `mcp_auth_access_tokens` - Access tokens
+* `mcp_auth_refresh_tokens` - Refresh tokens
+
+4. Configure the initializer at `config/initializers/mcp_auth.rb`:
 
 ```ruby
 Mcp::Auth.configure do |config|
@@ -64,18 +86,45 @@ Mcp::Auth.configure do |config|
   config.access_token_lifetime = 3600 # 1 hour
   config.refresh_token_lifetime = 2_592_000 # 30 days
   config.authorization_code_lifetime = 1800 # 30 minutes
-  
-  # Custom user data fetcher
+
+  # Custom user data fetcher - CUSTOMIZE THIS FOR YOUR APP
   config.fetch_user_data = proc do |user_id, org_id|
     user = User.find(user_id)
     {
       email: user.email,
-      api_key_id: nil,
+      api_key_id: nil,  # Add your API key logic here if needed
       api_key_secret: nil
     }
+  rescue ActiveRecord::RecordNotFound
+    { email: 'unknown@example.com', api_key_id: nil, api_key_secret: nil }
+  end
+
+  # Methods for getting current user and org
+  config.current_user_method = :current_user
+  config.current_org_method = :current_org
+end
+```
+
+5. Ensure Authentication Methods Exist
+   Make sure your ApplicationController has these methods:
+```ruby
+class ApplicationController < ActionController::Base
+  # Method to get the currently logged-in user
+  def current_user
+    # Your logic here (e.g., Devise's current_user)
+  end
+
+  # Method to get the current organization (if applicable)
+  def current_org
+    # Your logic here
   end
 end
 ```
+6. Restart Your Server
+````bash
+spring stop  # Clear spring cache
+rails server
+````
 
 ## Usage
 
@@ -93,6 +142,7 @@ MCP Auth automatically provides the following endpoints:
 #### OAuth Flow Endpoints
 
 - `GET/POST /oauth/authorize` - Authorization endpoint
+- `POST /oauth/approve` - Consent approval endpoint
 - `POST /oauth/token` - Token endpoint
 - `POST /oauth/register` - Dynamic client registration (RFC 7591)
 - `POST /oauth/revoke` - Token revocation (RFC 7009)
@@ -130,6 +180,16 @@ class MyController < ApplicationController
   end
 end
 ```
+
+Available helper methods:
+
+* `mcp_authenticated?` - Returns true if request has valid token
+* `mcp_user_id` - User ID from token
+* `mcp_org_id` - Organization ID from token
+* `mcp_email` - User email from token
+* `mcp_scope` - Token scopes
+* `mcp_token` - The access token itself
+* `mcp_api_key` - API key if configured
 
 ### OAuth 2.1 Authorization Flow
 
@@ -190,6 +250,23 @@ refresh_token=REFRESH_TOKEN&
 client_id=CLIENT_ID
 ```
 
+### Customizing the Consent Screen
+The generator creates a consent view at `app/views/mcp/auth/consent.html.erb`.
+If the generator doesn't create the view, copy the template from `CONSENT_VIEW_TEMPLATE.md` in the gem directory.
+To customize:
+
+Edit `app/views/mcp/auth/consent.html.erb` to match your branding
+Update `config/initializers/mcp_auth.rb`:
+
+````ruby
+config.use_custom_consent_view = true
+````
+The view has access to:
+
+* `@client_name` - Name of the OAuth client
+* `@requested_scopes` - Array of scope descriptions
+* `@authorization_params` - OAuth parameters to preserve
+
 ### Rake Tasks
 
 MCP Auth includes helpful rake tasks:
@@ -217,64 +294,30 @@ Add this to your scheduler (e.g., `whenever`, `sidekiq-cron`, or `cron`):
 rake mcp_auth:cleanup
 ```
 
-## Security Considerations
-
-### HTTPS Required
-
-OAuth 2.1 requires HTTPS for all endpoints except localhost. MCP Auth enforces this in production environments.
-
-### PKCE Required
-
-All authorization code flows must use PKCE (Proof Key for Code Exchange) with the S256 method for enhanced security.
-
-### Token Audience Validation
-
-MCP Auth validates that access tokens are intended for your MCP server using RFC 8707 Resource Indicators. This prevents token confusion attacks.
-
-### Refresh Token Rotation
-
-Refresh tokens are automatically rotated when used, following OAuth 2.1 security best practices.
-
-### Short-Lived Access Tokens
-
-Access tokens are short-lived (default 1 hour) to minimize the impact of token theft.
-
-## Customization
-
-### Custom User Data
-
-Customize how user data is fetched for tokens:
-
-```ruby
-Mcp::Auth.configure do |config|
-  config.fetch_user_data = proc do |user_id, org_id|
-    user = User.find(user_id)
-    org_user = user.org_users.find_by(org_id: org_id)
-    
-    {
-      email: user.email,
-      api_key_id: org_user&.api_key&.id,
-      api_key_secret: org_user&.api_key&.secret
-    }
-  end
-end
-```
-
-### Custom Controller Methods
-
-Specify custom methods for authentication:
-
-```ruby
-Mcp::Auth.configure do |config|
-  config.current_user_method = :current_user
-  config.current_org_method = :current_organization
-end
-```
-
 ## Testing
+Test the Installation:
+
+```bash
+# Start your server
+rails server
+
+# Test discovery endpoints
+curl http://localhost:3000/.well-known/oauth-protected-resource
+curl http://localhost:3000/.well-known/oauth-authorization-server
+
+# Register a test client
+curl -X POST http://localhost:3000/oauth/register \
+  -H "Content-Type: application/json" \
+  -d '{
+    "client_name": "Test Client",
+    "redirect_uris": ["http://localhost:3000/callback"]
+  }'
+```
+
+In Your Tests
 
 ```ruby
-# In your tests, you can create tokens directly:
+# Create tokens directly in tests
 user = create(:user)
 org = create(:org)
 
@@ -291,8 +334,60 @@ access_token = Mcp::Auth::Services::TokenService.generate_access_token(
   base_url: 'https://example.com'
 )
 
-# Use the token in your requests
+# Use in requests
 get '/mcp/api/resources', headers: { 'Authorization' => "Bearer #{access_token}" }
+```
+
+## Security Considerations
+
+### HTTPS Required
+OAuth 2.1 requires HTTPS for all endpoints except localhost. MCP Auth enforces this in production environments.
+
+### PKCE Required
+All authorization code flows must use PKCE (Proof Key for Code Exchange) with the S256 method for enhanced security.
+
+### Token Audience Validation
+MCP Auth validates that access tokens are intended for your MCP server using RFC 8707 Resource Indicators. This prevents token confusion attacks.
+
+### Refresh Token Rotation
+Refresh tokens are automatically rotated when used, following OAuth 2.1 security best practices.
+
+### Short-Lived Access Tokens
+Access tokens are short-lived (default 1 hour) to minimize the impact of token theft.
+
+### Environment Variables
+Set these environment variables (optional):
+```bash
+# OAuth secret for JWT signing (recommended in production)
+MCP_OAUTH_PRIVATE_KEY=your_secure_random_string
+
+# Custom authorization server URL (if different from resource server)
+MCP_AUTHORIZATION_SERVER_URL=https://auth.example.com
+````
+
+## Troubleshooting
+
+### Routes Not Working
+Problem: OAuth endpoints return 404 or redirect to login
+
+Solution: Ensure mount Mcp::Auth::Engine => '/' is at the very top of your config/routes.rb, before any other routes.
+````ruby
+Rails.application.routes.draw do
+  # THIS MUST BE FIRST!
+  mount Mcp::Auth::Engine => '/'
+
+  # Then other routes...
+  devise_for :users
+  # ...
+end
+````
+
+## Consent Screen Template Missing
+Problem: Missing template layouts/mcp_auth error
+
+Solution: Run the generator to create the view:
+```bash
+rails generate mcp:auth:install
 ```
 
 ## Standards Compliance
@@ -325,7 +420,7 @@ bundle exec rspec
 
 ## Contributing
 
-Bug reports and pull requests are welcome on GitHub at https://github.com/yourusername/mcp-auth.
+Bug reports and pull requests are welcome on GitHub at https://github.com/SerhiiBorozenets/mcp-auth.
 
 ## License
 

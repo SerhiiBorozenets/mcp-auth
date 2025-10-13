@@ -53,7 +53,7 @@ Enhancement suggestions are tracked as GitHub issues. When creating an enhanceme
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/mcp-auth.git
+git clone https://github.com/SerhiiBorozenets/mcp-auth.git
 cd mcp-auth
 ```
 

@@ -20,14 +20,6 @@ module Mcp
                                            Mcp::Auth::Middleware::McpHeadersMiddleware
       end
 
-      initializer "mcp_auth.routes" do
-        config.after_initialize do
-          Rails.application.routes.append do
-            mount Mcp::Auth::Engine => "/"
-          end
-        end
-      end
-
       initializer "mcp_auth.configure" do
         config.mcp_auth = ActiveSupport::OrderedOptions.new
         config.mcp_auth.oauth_secret = ENV.fetch('MCP_OAUTH_PRIVATE_KEY', nil)

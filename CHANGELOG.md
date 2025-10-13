@@ -39,5 +39,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Token audience validation to prevent confused deputy attacks
 - WWW-Authenticate header with resource metadata on 401 responses
 
-[Unreleased]: https://github.com/yourusername/mcp-auth/compare/v0.1.0...HEAD
-[0.1.0]: https://github.com/yourusername/mcp-auth/releases/tag/v0.1.0
+[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/SerhiiBorozenets/mcp-auth/releases/tag/v0.1.0

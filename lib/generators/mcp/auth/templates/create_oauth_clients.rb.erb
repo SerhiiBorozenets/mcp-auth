@@ -1,5 +1,5 @@
 class CreateMcpAuthOauthClients < ActiveRecord::Migration<%= migration_version %>
-  def change
+  def up
     create_table :mcp_auth_oauth_clients, id: false do |t|
       t.uuid :client_id, primary_key: true, null: false, default: -> { 'gen_random_uuid()' }
       t.string :client_secret, null: false
@@ -13,5 +13,10 @@ class CreateMcpAuthOauthClients < ActiveRecord::Migration<%= migration_version %
     end
 
     add_index :mcp_auth_oauth_clients, :client_id, unique: true
+  end
+
+  def down
+    remove_index :mcp_auth_oauth_clients, :client_id
+    drop_table :mcp_auth_oauth_clients
   end
 end

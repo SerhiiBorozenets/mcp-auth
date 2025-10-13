@@ -30,10 +30,27 @@ Mcp::Auth.configure do |config|
   # Methods for getting current user and org in controllers
   config.current_user_method = :current_user
   config.current_org_method = :current_org
+
+  # === Custom Consent View ===
+  # Set to true to use your own consent view instead of the gem's default
+  # The generated view will be at app/views/mcp/auth/consent.html.erb
+  # You can customize it to match your app's branding
+  config.use_custom_consent_view = false
+
+  # Path to custom consent view (relative to app/views)
+  # Only used if use_custom_consent_view is true
+  config.consent_view_path = 'mcp/auth/consent'
+
+  # To customize the consent screen:
+  # 1. Set use_custom_consent_view = true
+  # 2. Edit app/views/mcp/auth/consent.html.erb
+  # 3. The view has access to:
+  #    - @client_name: Name of the OAuth client
+  #    - @requested_scopes: Array of scope descriptions
+  #    - @authorization_params: Hash of OAuth parameters
 end
 
 # Include controller helpers in ApplicationController
 Rails.application.config.to_prepare do
   ApplicationController.include Mcp::Auth::ControllerHelpers
 end
-

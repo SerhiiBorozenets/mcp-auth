@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
 
   spec.summary = "OAuth 2.1 authorization for Model Context Protocol servers"
   spec.description = "A Rails engine providing OAuth 2.1 authorization for MCP servers with PKCE, dynamic client registration, and resource indicators support"
-  spec.homepage = "https://github.com/yourusername/mcp-auth"
+  spec.homepage = "https://github.com/SerhiiBorozenets/mcp-auth"
   spec.license = "MIT"
   spec.required_ruby_version = ">= 3.0.0"
 
@@ -31,7 +31,7 @@ Gem::Specification.new do |spec|
 
   # Runtime dependencies
   spec.add_dependency "rails", ">= 7.0"
-  spec.add_dependency "jwt", "~> 2.7"
+  spec.add_dependency "jwt", ">= 2.7"
 
   # Development dependencies
   spec.add_development_dependency "rspec-rails", "~> 6.0"

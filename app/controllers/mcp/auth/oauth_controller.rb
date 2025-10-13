@@ -119,7 +119,7 @@ module Mcp
         render json: response, content_type: 'application/json'
       end
 
-      # OpenID Connect UserInfo
+      # OpenID Connect UserInfo Endpoint
       def userinfo
         auth_header = request.headers['Authorization']
 
@@ -320,7 +320,7 @@ module Mcp
         }
       end
 
-      # === Consent Screen ===
+      # === Consent Screen - ONLY ONE DEFINITION ===
 
       def show_consent_screen
         @client_name = get_client_name
@@ -330,7 +330,26 @@ module Mcp
           :state, :code_challenge, :code_challenge_method, :resource
         )
 
-        render 'mcp/auth/consent', layout: 'mcp_auth'
+        # Check if custom view should be used
+        if use_custom_consent_view?
+          render Rails.application.config.mcp_auth.consent_view_path, layout: 'application'
+        else
+          render 'mcp/auth/consent', layout: false
+        end
+      end
+
+      def use_custom_consent_view?
+        config = Rails.application.config.mcp_auth
+        config.use_custom_consent_view &&
+          template_exists?(config.consent_view_path)
+      rescue
+        false
+      end
+
+      def template_exists?(path)
+        lookup_context.exists?(path, [], false)
+      rescue
+        false
       end
 
       def get_client_name
