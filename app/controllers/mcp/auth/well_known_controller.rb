@@ -103,7 +103,7 @@ module Mcp
       end
 
       def authorization_server_url
-        config_url = Rails.application.config.mcp_auth.authorization_server_url
+        config_url = Mcp::Auth.configuration&.authorization_server_url
         config_url.presence || "#{request.scheme}://#{request.host_with_port}"
       end
     end

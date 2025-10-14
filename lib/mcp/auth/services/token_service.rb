@@ -136,16 +136,16 @@ module Mcp
           private
 
           def oauth_secret
-            secret = Rails.application.config.mcp_auth.oauth_secret
+            secret = Mcp::Auth.configuration&.oauth_secret
             secret.presence || Rails.application.secret_key_base
           end
 
           def token_lifetime
-            Rails.application.config.mcp_auth.access_token_lifetime || 3600
+            Mcp::Auth.configuration&.access_token_lifetime || 3600
           end
 
           def refresh_token_lifetime
-            Rails.application.config.mcp_auth.refresh_token_lifetime || 2_592_000
+            Mcp::Auth.configuration&.refresh_token_lifetime || 2_592_000
           end
 
           # RFC 8707: Normalize resource URI (remove trailing slash, lowercase scheme/host)
@@ -191,9 +191,7 @@ module Mcp
           end
 
           def fetch_user_data(user_id, org_id)
-            # This should be overridden by the host application
-            # Provide a hook for customization
-            if defined?(Mcp::Auth.configuration.fetch_user_data)
+            if Mcp::Auth.configuration&.fetch_user_data
               Mcp::Auth.configuration.fetch_user_data.call(user_id, org_id)
             else
               default_fetch_user_data(user_id, org_id)

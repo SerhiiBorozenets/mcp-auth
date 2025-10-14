@@ -1,7 +1,9 @@
 # frozen_string_literal: true
 
-require "mcp/auth/version"
-require "mcp/auth/engine"
+require 'mcp/auth/version'
+require 'mcp/auth/engine'
+require 'mcp/auth/services/token_service'
+require 'mcp/auth/services/authorization_service'
 
 module Mcp
   module Auth
@@ -74,10 +76,3 @@ module Mcp
     end
   end
 end
-
-# Auto-load services
-require "mcp/auth/services/token_service"
-require "mcp/auth/services/authorization_service"
-
-# Auto-load middleware
-require "mcp/auth/middleware/mcp_headers_middleware"

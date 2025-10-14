@@ -20,7 +20,7 @@ Next steps:
 
 4. Set environment variables (optional):
 
-   MCP_OAUTH_PRIVATE_KEY: Secret key for signing JWTs
+   MCP_HMAC_SECRET: Secret key for signing JWTs
    MCP_AUTHORIZATION_SERVER_URL: Custom authorization server URL
 
 5. Your OAuth endpoints are now available at:

@@ -14,12 +14,6 @@ module Mcp
         g.factory_bot dir: 'spec/factories'
       end
 
-      initializer "mcp_auth.middleware" do |app|
-        # Insert middleware after ActionDispatch::Session but before authentication
-        app.config.middleware.insert_after ActionDispatch::Session::CookieStore,
-                                           Mcp::Auth::Middleware::McpHeadersMiddleware
-      end
-
       initializer "mcp_auth.configure" do
         config.mcp_auth = ActiveSupport::OrderedOptions.new
         config.mcp_auth.oauth_secret = ENV.fetch('MCP_OAUTH_PRIVATE_KEY', nil)

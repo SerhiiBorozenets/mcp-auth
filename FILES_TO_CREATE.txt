@@ -18,9 +18,6 @@ Services:
 11. lib/mcp/auth/services/token_service.rb
 12. lib/mcp/auth/services/authorization_service.rb
 
-Middleware:
-13. lib/mcp/auth/middleware/mcp_headers_middleware.rb
-
 Models:
 14. app/models/mcp/auth/oauth_client.rb
 15. app/models/mcp/auth/authorization_code.rb

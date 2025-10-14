@@ -77,7 +77,7 @@ This creates the following tables:
 ```ruby
 Mcp::Auth.configure do |config|
   # OAuth secret for signing JWTs
-  config.oauth_secret = ENV.fetch('MCP_OAUTH_PRIVATE_KEY', Rails.application.secret_key_base)
+  config.oauth_secret = ENV.fetch('MCP_HMAC_SECRET', Rails.application.secret_key_base)
   
   # Authorization server URL (defaults to same as resource server)
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)
@@ -359,7 +359,7 @@ Access tokens are short-lived (default 1 hour) to minimize the impact of token t
 Set these environment variables (optional):
 ```bash
 # OAuth secret for JWT signing (recommended in production)
-MCP_OAUTH_PRIVATE_KEY=your_secure_random_string
+MCP_HMAC_SECRET=your_secure_random_string
 
 # Custom authorization server URL (if different from resource server)
 MCP_AUTHORIZATION_SERVER_URL=https://auth.example.com

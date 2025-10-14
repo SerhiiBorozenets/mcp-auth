@@ -3,7 +3,7 @@
 Mcp::Auth.configure do |config|
   # OAuth secret for signing JWTs
   # Should be a secure random string in production
-  config.oauth_secret = ENV.fetch('MCP_OAUTH_PRIVATE_KEY', Rails.application.secret_key_base)
+  config.oauth_secret = ENV.fetch('MCP_HMAC_SECRET', Rails.application.secret_key_base)
 
   # Authorization server URL (defaults to same as resource server)
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)

@@ -21,10 +21,6 @@ mcp-auth/
 │   │   └── auth/
 │   │       ├── version.rb                   # Gem version (0.1.0)
 │   │       ├── engine.rb                    # Rails engine configuration
-│   │       │
-│   │       ├── middleware/
-│   │       │   └── mcp_headers_middleware.rb    # Request authentication middleware
-│   │       │
 │   │       └── services/
 │   │           ├── token_service.rb             # JWT generation & validation
 │   │           └── authorization_service.rb     # Authorization code & PKCE logic
@@ -121,14 +117,6 @@ mcp-auth/
 - Authorization code generation with PKCE
 - Code validation and consumption (one-time use)
 - PKCE challenge verification (S256 method)
-
-### Middleware (`lib/mcp/auth/middleware/`)
-
-**mcp_headers_middleware.rb**
-- Protects all `/mcp/api/*` routes
-- Bearer token authentication (RFC 6750)
-- WWW-Authenticate header on 401 (RFC 9728)
-- CORS support for OPTIONS requests
 
 ### Models (`app/models/mcp/auth/`)
 
