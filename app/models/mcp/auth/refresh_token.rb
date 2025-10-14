@@ -2,7 +2,7 @@
 
 module Mcp
   module Auth
-    class RefreshToken < ApplicationRecord
+    class RefreshToken < ActiveRecord::Base
       self.table_name = "mcp_auth_refresh_tokens"
 
       belongs_to :user

@@ -9,6 +9,9 @@
 /test/tmp/
 /test/version_tmp/
 /tmp/
+/log/
+/logs/
+*.log
 
 # rspec failure tracking
 .rspec_status

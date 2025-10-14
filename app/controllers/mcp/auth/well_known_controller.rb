@@ -2,7 +2,7 @@
 
 module Mcp
   module Auth
-    class WellKnownController < ApplicationController
+    class WellKnownController < ActionController::Base
       skip_before_action :verify_authenticity_token
       before_action :set_cors_headers
       before_action :handle_options_request
@@ -91,7 +91,7 @@ module Mcp
         response.headers['Access-Control-Allow-Origin'] = '*'
         response.headers['Access-Control-Allow-Methods'] = 'GET, OPTIONS'
         response.headers['Access-Control-Allow-Headers'] = 'Authorization, Content-Type'
-        response.headers['Content-Type'] = 'application/json' unless request.method == 'OPTIONS'
+        response.headers['Content-Type'] = 'application/json; charset=utf-8' unless request.method == 'OPTIONS'
       end
 
       def handle_options_request

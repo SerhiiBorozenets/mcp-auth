@@ -12,8 +12,10 @@ module Mcp
             begin
               payload = JWT.decode(token, oauth_secret, true, { algorithm: 'HS256' }).first
 
-              # Check expiration
-              return nil if payload['exp'] && payload['exp'] < Time.current.to_i
+              # Check expiration manually to ensure proper handling
+              if payload['exp']
+                return nil if payload['exp'] <= Time.current.to_i
+              end
 
               # Validate audience if resource provided (RFC 8707 compliance)
               if resource && payload['aud'].present?
@@ -40,17 +42,21 @@ module Mcp
             # RFC 8707: Use provided resource or default to MCP API endpoint
             audience = normalize_resource_uri(data[:resource].presence || "#{base_url}/mcp/api")
 
+            # Calculate expiration time
+            exp_time = data[:expires_at] ? data[:expires_at].to_i : (Time.current.to_i + token_lifetime)
+
             payload = {
               iss: base_url,
               aud: audience,
               sub: data[:user_id].to_s,
               org: data[:org_id]&.to_s,
+              client_id: data[:client_id],
               email: user_data[:email],
               scope: data[:scope],
               api_key_id: user_data[:api_key_id],
               api_key_secret: user_data[:api_key_secret],
               iat: Time.current.to_i,
-              exp: Time.current.to_i + token_lifetime
+              exp: exp_time
             }
 
             token = JWT.encode(payload, oauth_secret, 'HS256')
@@ -68,6 +74,9 @@ module Mcp
           def generate_refresh_token(data)
             refresh_token = SecureRandom.hex(32)
 
+            # Use provided expires_at or default
+            expires_at = data[:expires_at] || refresh_token_lifetime.seconds.from_now
+
             begin
               Mcp::Auth::RefreshToken.create!(
                 token: refresh_token,
@@ -75,7 +84,7 @@ module Mcp
                 scope: data[:scope],
                 user_id: data[:user_id],
                 org_id: data[:org_id],
-                expires_at: refresh_token_lifetime.seconds.from_now
+                expires_at: expires_at
               )
 
               Rails.logger.info "[TokenService] Refresh token created for user #{data[:user_id]}"
@@ -90,8 +99,11 @@ module Mcp
           def validate_refresh_token(refresh_token)
             return nil if refresh_token.blank?
 
-            token_record = Mcp::Auth::RefreshToken.active.find_by(token: refresh_token)
+            token_record = Mcp::Auth::RefreshToken.find_by(token: refresh_token)
             return nil unless token_record
+
+            # Check if token is expired
+            return nil if token_record.expires_at < Time.current
 
             Rails.logger.info "[TokenService] Refresh token validated for user #{token_record.user_id}"
             {
@@ -176,6 +188,9 @@ module Mcp
           end
 
           def store_access_token(token, data, audience)
+            # Use provided expires_at or default
+            expires_at = data[:expires_at] || token_lifetime.seconds.from_now
+
             Mcp::Auth::AccessToken.create!(
               token: token,
               client_id: data[:client_id],
@@ -183,7 +198,7 @@ module Mcp
               scope: data[:scope],
               user_id: data[:user_id],
               org_id: data[:org_id],
-              expires_at: token_lifetime.seconds.from_now
+              expires_at: expires_at
             )
             Rails.logger.info "[TokenService] Access token stored for user #{data[:user_id]}"
           rescue ActiveRecord::RecordInvalid => e

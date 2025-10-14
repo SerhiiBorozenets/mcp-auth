@@ -2,7 +2,7 @@
 
 module Mcp
   module Auth
-    class AuthorizationCode < ApplicationRecord
+    class AuthorizationCode < ActiveRecord::Base
       self.table_name = "mcp_auth_authorization_codes"
 
       belongs_to :user
