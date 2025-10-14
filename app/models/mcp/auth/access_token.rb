@@ -1,7 +1,7 @@
 module Mcp
   module Auth
-    class AccessToken < ApplicationRecord
-      # self.table_name = "mcp_auth_access_tokens"
+    class AccessToken < ActiveRecord::Base
+      self.table_name = "mcp_auth_access_tokens"
 
       belongs_to :user
       belongs_to :org, optional: true

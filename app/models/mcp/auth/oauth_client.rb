@@ -2,7 +2,7 @@
 
 module Mcp
   module Auth
-    class OauthClient < ApplicationRecord
+    class OauthClient < ActiveRecord::Base
       self.table_name = "mcp_auth_oauth_clients"
       self.primary_key = "client_id"
 
