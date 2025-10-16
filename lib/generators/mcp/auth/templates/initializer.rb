@@ -8,6 +8,19 @@ Mcp::Auth.configure do |config|
   # Authorization server URL (defaults to same as resource server)
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)
 
+  # MCP Server Path - where your MCP server is mounted
+  # Default: '/mcp/api' - change this if your MCP server is at a different path
+  # Examples: '/api/mcp', '/v1/mcp', '/assistant/api'
+  config.mcp_server_path = ENV.fetch('MCP_SERVER_PATH', '/mcp/api')
+
+  # MCP Documentation URL - link to your MCP server documentation
+  # Can be a full URL (https://docs.example.com/mcp) or a path (/docs/mcp)
+  # Default: nil (will auto-generate as {mcp_server_path}/docs)
+  # Examples:
+  #   config.mcp_docs_url = '/docs/mcp'
+  #   config.mcp_docs_url = 'https://docs.example.com/mcp-api'
+  config.mcp_docs_url = ENV.fetch('MCP_DOCS_URL', nil)
+
   # Token lifetimes (in seconds)
   config.access_token_lifetime = 3600 # 1 hour
   config.refresh_token_lifetime = 2_592_000 # 30 days

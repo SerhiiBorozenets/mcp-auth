@@ -16,6 +16,9 @@ module Mcp
     def self.configure
       self.configuration ||= Configuration.new
       yield(configuration)
+
+      # Also set on Rails.application.config for controllers to access
+      Rails.application.config.mcp_auth = configuration if defined?(Rails)
     end
 
     class Configuration
@@ -28,7 +31,9 @@ module Mcp
                     :current_user_method,
                     :current_org_method,
                     :consent_view_path,
-                    :use_custom_consent_view
+                    :use_custom_consent_view,
+                    :mcp_server_path,
+                    :mcp_docs_url
 
       def initialize
         @oauth_secret = nil
@@ -41,6 +46,8 @@ module Mcp
         @current_org_method = :current_org
         @consent_view_path = 'mcp/auth/consent'
         @use_custom_consent_view = false
+        @mcp_server_path = '/mcp/api'  # Default path
+        @mcp_docs_url = nil
       end
     end
 

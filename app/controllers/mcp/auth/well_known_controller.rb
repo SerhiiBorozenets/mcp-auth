@@ -16,7 +16,7 @@ module Mcp
           authorization_servers: [authorization_server_url],
           scopes_supported: %w[mcp:read mcp:write],
           bearer_methods_supported: %w[header],
-          resource_documentation: "#{request.base_url}/mcp/docs",
+          resource_documentation: mcp_documentation_url,
           resource_parameter_supported: true, # RFC 8707 support
           authorization_response_iss_parameter_supported: true # OAuth 2.1
         }
@@ -99,7 +99,26 @@ module Mcp
       end
 
       def canonical_resource_url
-        "#{request.scheme}://#{request.host_with_port}/mcp/api"
+        # Use configured MCP server path, or default to /mcp/api
+        mcp_path = Mcp::Auth.configuration&.mcp_server_path || '/mcp/api'
+        "#{request.scheme}://#{request.host_with_port}#{mcp_path}"
+      end
+
+      def mcp_documentation_url
+        # Use configured docs URL, or generate default based on server path
+        docs_url = Mcp::Auth.configuration&.mcp_docs_url
+
+        if docs_url.present?
+          # If it's a full URL, use as-is
+          return docs_url if docs_url.start_with?('http://', 'https://')
+
+          # If it's a path, prepend base URL
+          return "#{request.base_url}#{docs_url}"
+        end
+
+        # Default: append /docs to the MCP server path
+        mcp_path = Mcp::Auth.configuration&.mcp_server_path || '/mcp/api'
+        "#{request.base_url}#{mcp_path}/docs"
       end
 
       def authorization_server_url
