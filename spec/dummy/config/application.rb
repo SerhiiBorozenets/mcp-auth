@@ -25,7 +25,7 @@ module Dummy
       c.refresh_token_lifetime = 2_592_000
       c.authorization_code_lifetime = 1800
 
-      c.fetch_user_data = proc do |user_id, org_id|
+      c.fetch_user_data = proc do |data|
         {
           email: "test@example.com",
           api_key_id: nil,

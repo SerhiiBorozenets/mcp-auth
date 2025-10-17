@@ -51,11 +51,11 @@ Mcp::Auth.configure do |config|
   #   - :email (String) - User's email address
   #   - :api_key_id (String/Integer, optional) - API key ID if using API keys
   #   - :api_key_secret (String, optional) - API key secret if using API keys
-  config.fetch_user_data = proc do |user_id, org_id|
-    user = User.find(user_id)
+  config.fetch_user_data = proc do |data|
+    user = User.find(data[:user_id])
 
     # Example: If you have API keys per organization user
-    # org_user = OrgUser.find_by(user_id: user_id, org_id: org_id)
+    # org_user = OrgUser.find_by(user_id: data[:user_id], org_id: data[:org_id])
     # api_key = org_user&.api_key
 
     {

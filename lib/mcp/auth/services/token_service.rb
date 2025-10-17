@@ -37,7 +37,7 @@ module Mcp
 
           # Generate JWT access token with proper audience binding
           def generate_access_token(data, base_url:)
-            user_data = fetch_user_data(data[:user_id], data[:org_id])
+            user_data = fetch_user_data(data)
 
             # RFC 8707: Use provided resource or default to MCP API endpoint
             audience = normalize_resource_uri(data[:resource].presence || "#{base_url}/mcp/api")
@@ -205,15 +205,15 @@ module Mcp
             Rails.logger.error "[TokenService] Failed to store access token: #{e.message}"
           end
 
-          def fetch_user_data(user_id, org_id)
+          def fetch_user_data(data)
             if Mcp::Auth.configuration&.fetch_user_data
-              Mcp::Auth.configuration.fetch_user_data.call(user_id, org_id)
+              Mcp::Auth.configuration.fetch_user_data.call(data)
             else
-              default_fetch_user_data(user_id, org_id)
+              default_fetch_user_data(data[:user_id])
             end
           end
 
-          def default_fetch_user_data(user_id, org_id)
+          def default_fetch_user_data(user_id)
             user = User.find(user_id)
             {
               email: user.email,

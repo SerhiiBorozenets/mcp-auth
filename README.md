@@ -186,9 +186,9 @@ Mcp::Auth.configure do |config|
   config.authorization_code_lifetime = 1800  # 30 minutes
 
   # User data fetcher - CUSTOMIZE THIS
-  config.fetch_user_data = proc do |user_id, org_id|
-    user = User.find(user_id)
-    org = Org.find(org_id) if org_id
+  config.fetch_user_data = proc do |data|
+    user = User.find(data[:user_id])
+    org = Org.find(data[:org_id]) if data[:org_id]
     
     # Return user data + API key (if you have one)
     {
