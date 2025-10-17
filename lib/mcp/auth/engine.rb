@@ -14,6 +14,11 @@ module Mcp
         g.factory_bot dir: 'spec/factories'
       end
 
+      # Load dependencies before initializers
+      config.before_initialize do
+        require 'mcp/auth/scope_registry'
+      end
+
       initializer "mcp_auth.configure" do
         config.mcp_auth = ActiveSupport::OrderedOptions.new
         config.mcp_auth.oauth_secret = ENV.fetch('MCP_OAUTH_PRIVATE_KEY', nil)

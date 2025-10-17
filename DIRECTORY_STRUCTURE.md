@@ -21,6 +21,7 @@ mcp-auth/
 │   │   └── auth/
 │   │       ├── version.rb                   # Gem version (0.1.0)
 │   │       ├── engine.rb                    # Rails engine configuration
+│   │       ├── scope_registry.rb            # OAuth scope management
 │   │       └── services/
 │   │           ├── token_service.rb             # JWT generation & validation
 │   │           └── authorization_service.rb     # Authorization code & PKCE logic

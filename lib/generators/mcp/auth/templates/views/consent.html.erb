@@ -87,29 +87,126 @@
       .scope-item {
           display: flex;
           align-items: flex-start;
-          padding: 12px;
-          margin-bottom: 8px;
+          padding: 14px 16px;
+          margin-bottom: 10px;
           background: #f7fafc;
-          border-radius: 6px;
-          transition: background 0.2s;
+          border: 1px solid #e2e8f0;
+          border-radius: 8px;
+          transition: all 0.2s;
+          cursor: pointer;
       }
 
-      .scope-item:hover {
+      .scope-item:hover:not(.required) {
           background: #edf2f7;
+          border-color: #667eea;
       }
 
-      .scope-icon {
+      .scope-item.required {
+          border-left: 3px solid #f59e0b;
+          cursor: default;
+      }
+
+      .scope-item.selected {
+          background: #f0f4ff;
+          border-color: #667eea;
+      }
+
+      .scope-checkbox {
           flex-shrink: 0;
           width: 20px;
           height: 20px;
           margin-right: 12px;
-          color: #667eea;
+          margin-top: 2px;
+          cursor: pointer;
+          accent-color: #667eea;
       }
 
-      .scope-text {
-          color: #4a5568;
+      .scope-checkbox:disabled {
+          cursor: not-allowed;
+          opacity: 0.5;
+      }
+
+      .scope-content {
+          flex: 1;
+      }
+
+      .scope-header {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+          margin-bottom: 4px;
+      }
+
+      .scope-name {
+          color: #2d3748;
           font-size: 14px;
+          font-weight: 600;
+      }
+
+      .scope-badge {
+          font-size: 10px;
+          background: #f59e0b;
+          color: white;
+          padding: 3px 8px;
+          border-radius: 12px;
+          text-transform: uppercase;
+          font-weight: 600;
+          letter-spacing: 0.5px;
+      }
+
+      .scope-description {
+          color: #718096;
+          font-size: 13px;
           line-height: 1.5;
+      }
+
+      .warning-box {
+          background: #fef3c7;
+          border: 1px solid #fbbf24;
+          border-radius: 8px;
+          padding: 14px;
+          margin-bottom: 24px;
+          display: flex;
+          align-items: start;
+          gap: 10px;
+      }
+
+      .warning-icon {
+          color: #f59e0b;
+          font-size: 18px;
+          flex-shrink: 0;
+      }
+
+      .warning-text {
+          font-size: 13px;
+          color: #78350f;
+          line-height: 1.5;
+      }
+
+      .select-all-container {
+          margin-bottom: 16px;
+          padding: 12px;
+          background: #f0fdf4;
+          border: 1px solid #86efac;
+          border-radius: 8px;
+          display: flex;
+          align-items: center;
+          gap: 10px;
+      }
+
+      .select-all-checkbox {
+          width: 18px;
+          height: 18px;
+          cursor: pointer;
+          accent-color: #667eea;
+      }
+
+      .select-all-label {
+          color: #166534;
+          font-size: 14px;
+          font-weight: 500;
+          cursor: pointer;
+          user-select: none;
       }
 
       .actions {
@@ -130,12 +227,17 @@
           text-transform: none;
       }
 
+      button:disabled {
+          opacity: 0.5;
+          cursor: not-allowed;
+      }
+
       .btn-approve {
           background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
           color: white;
       }
 
-      .btn-approve:hover {
+      .btn-approve:hover:not(:disabled) {
           transform: translateY(-2px);
           box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
       }
@@ -152,10 +254,11 @@
       .security-note {
           margin-top: 24px;
           padding: 16px;
-          background: #fef5e7;
+          background: #f0fdf4;
+          border: 1px solid #86efac;
           border-radius: 6px;
           font-size: 13px;
-          color: #975a16;
+          color: #166534;
           line-height: 1.5;
       }
 
@@ -163,13 +266,31 @@
           display: block;
           margin-bottom: 4px;
       }
+
+      .selected-count {
+          margin-top: 16px;
+          padding: 10px;
+          background: #eff6ff;
+          border: 1px solid #93c5fd;
+          border-radius: 6px;
+          text-align: center;
+          font-size: 13px;
+          color: #1e40af;
+      }
+
+      @media (max-width: 600px) {
+          .container { margin: 10px; }
+          .header { padding: 24px; }
+          .content { padding: 24px; }
+          .actions { flex-direction: column-reverse; }
+      }
   </style>
 </head>
 <body>
 <div class="container">
   <div class="header">
-    <h1>Authorization Request</h1>
-    <p>Review the permissions being requested</p>
+    <h1>🔐 Authorization Request</h1>
+    <p>Review and select the permissions you want to grant</p>
   </div>
 
   <div class="content">
@@ -178,34 +299,229 @@
       <p>wants to access your MCP server</p>
     </div>
 
-    <div class="scopes">
-      <h3>This application will be able to:</h3>
-      <%% @requested_scopes.each do |scope| %>
-      <div class="scope-item">
-        <svg class="scope-icon" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path>
-        </svg>
-        <span class="scope-text"><%%= scope %></span>
+    <%% if @requested_scopes.any? { |s| s[:required] } %>
+    <div class="warning-box">
+      <div class="warning-icon">⚠️</div>
+      <div class="warning-text">
+        Some permissions are required for the application to function properly and cannot be deselected.
       </div>
-      <%% end %>
     </div>
-
-    <%%= form_with url: oauth_approve_path, method: :post, local: true do |f| %>
-    <%% @authorization_params.each do |key, value| %>
-    <%%= f.hidden_field key, value: value, id: nil %>
     <%% end %>
 
-    <div class="actions">
-      <%%= f.button 'Deny', type: 'submit', name: 'approved', value: 'false', class: 'btn-deny' %>
-      <%%= f.button 'Authorize', type: 'submit', name: 'approved', value: 'true', class: 'btn-approve' %>
+    <div class="scopes">
+      <h3>Select permissions to grant:</h3>
+
+      <%% optional_scopes = @requested_scopes.reject { |s| s[:required] } %>
+      <%% if optional_scopes.any? %>
+      <div class="select-all-container">
+        <input type="checkbox" id="selectAll" class="select-all-checkbox" checked>
+        <label for="selectAll" class="select-all-label">Select all optional permissions</label>
+      </div>
+      <%% end %>
+
+      <%%= form_with url: oauth_approve_path, method: :post, local: true, id: 'consentForm' do |f| %>
+      <%% @authorization_params.each do |key, value| %>
+      <%%= f.hidden_field key, value: value, id: nil %>
+      <%% end %>
+
+      <%% # Add hidden fields for required scopes since disabled checkboxes don't submit %>
+      <%% @requested_scopes.select { |s| s[:required] }.each do |scope| %>
+      <%%= hidden_field_tag 'scopes[]', scope[:key] %>
+      <%% end %>
+
+      <%% @requested_scopes.each_with_index do |scope, index| %>
+      <div class="scope-item <%%= 'required selected' if scope[:required] %> <%%= 'selected' if scope[:pre_selected] && !scope[:required] %>"
+           data-scope-key="<%%= scope[:key] %>"
+           data-required="<%%= scope[:required] %>"
+           data-pre-selected="<%%= scope[:pre_selected] %>">
+        <%% if scope[:required] %>
+        <%# Required scope: show disabled checkbox for UI, value submitted via hidden field above %>
+        <input type="checkbox"
+               class="scope-checkbox"
+               id="scope_<%%= index %>"
+               checked="checked"
+               disabled="disabled" />
+        <%% else %>
+        <%# Optional scope: checkbox value will be submitted, JS will handle pre-selection %>
+        <input type="checkbox"
+               name="scopes[]"
+               value="<%%= scope[:key] %>"
+               class="scope-checkbox"
+               id="scope_<%%= index %>" />
+        <%% end %>
+        <div class="scope-content">
+          <div class="scope-header">
+            <label for="scope_<%%= index %>" class="scope-name"><%%= scope[:name] %></label>
+            <%% if scope[:required] %>
+            <span class="scope-badge">Required</span>
+            <%% end %>
+          </div>
+          <div class="scope-description">
+            <%%= scope[:description] %>
+          </div>
+        </div>
+      </div>
+      <%% end %>
+
+      <div class="selected-count" id="selectedCount">
+        <span id="countText"></span>
+      </div>
+
+      <div class="actions">
+        <%%= f.button 'Deny', type: 'button', class: 'btn-deny', onclick: 'denyAccess()' %>
+        <%%= f.button 'Authorize', type: 'submit', name: 'approved', value: 'true', class: 'btn-approve', id: 'approveBtn' %>
+      </div>
+      <%% end %>
+
+      <%%= form_with url: oauth_approve_path, method: :post, local: true, id: 'denyForm' do |f| %>
+      <%% @authorization_params.each do |key, value| %>
+      <%%= f.hidden_field key, value: value, id: nil %>
+      <%% end %>
+      <%%= f.hidden_field :approved, value: 'false' %>
       <%% end %>
     </div>
 
     <div class="security-note">
       <strong>Security Notice</strong>
-      By authorizing this application, you grant it access to your MCP server with the specified permissions. You can revoke access at any time from your account settings.
+      You can select which permissions to grant. Only selected permissions will be authorized. Required permissions are pre-selected and cannot be changed. You can revoke access at any time from your account settings.
     </div>
   </div>
 </div>
+
+<script>
+  // Handle clicking on scope item (not checkbox)
+  document.addEventListener('DOMContentLoaded', function() {
+    // Pre-select checkboxes based on data-pre-selected attribute
+    const scopeItems = document.querySelectorAll('.scope-item');
+    scopeItems.forEach(item => {
+      const preSelected = item.getAttribute('data-pre-selected') === 'true';
+      const checkbox = item.querySelector('.scope-checkbox');
+
+      if (checkbox && !checkbox.disabled && preSelected) {
+        checkbox.checked = true;
+        item.classList.add('selected');
+      }
+    });
+
+    // Handle scope item clicks
+    scopeItems.forEach(item => {
+      item.addEventListener('click', function(e) {
+        // Don't toggle if clicking directly on checkbox or label
+        if (e.target.type === 'checkbox' || e.target.tagName === 'LABEL') {
+          return;
+        }
+
+        const checkbox = this.querySelector('.scope-checkbox');
+        if (checkbox && !checkbox.disabled) {
+          checkbox.checked = !checkbox.checked;
+          updateScopeItem(this, checkbox.checked);
+          updateSelectAll();
+          updateSelectedCount();
+        }
+      });
+    });
+
+    // Handle checkbox changes
+    const checkboxes = document.querySelectorAll('.scope-checkbox');
+    checkboxes.forEach(checkbox => {
+      checkbox.addEventListener('change', function() {
+        const scopeItem = this.closest('.scope-item');
+        updateScopeItem(scopeItem, this.checked);
+        updateSelectAll();
+        updateSelectedCount();
+      });
+    });
+
+    // Select all functionality
+    const selectAllCheckbox = document.getElementById('selectAll');
+    if (selectAllCheckbox) {
+      selectAllCheckbox.addEventListener('change', function() {
+        const optionalCheckboxes = document.querySelectorAll('.scope-checkbox:not(:disabled)');
+        optionalCheckboxes.forEach(checkbox => {
+          checkbox.checked = this.checked;
+          const scopeItem = checkbox.closest('.scope-item');
+          updateScopeItem(scopeItem, checkbox.checked);
+        });
+        updateSelectedCount();
+      });
+    }
+
+    // Initialize
+    updateSelectAll();
+    updateSelectedCount();
+  });
+
+  // Update visual state of scope item
+  function updateScopeItem(element, checked) {
+    if (checked) {
+      element.classList.add('selected');
+    } else {
+      element.classList.remove('selected');
+    }
+  }
+
+  // Update "Select All" checkbox state
+  function updateSelectAll() {
+    const selectAllCheckbox = document.getElementById('selectAll');
+    if (!selectAllCheckbox) return;
+
+    const optionalCheckboxes = Array.from(document.querySelectorAll('.scope-checkbox:not(:disabled)'));
+    const checkedOptional = optionalCheckboxes.filter(cb => cb.checked);
+
+    if (checkedOptional.length === 0) {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = false;
+    } else if (checkedOptional.length === optionalCheckboxes.length) {
+      selectAllCheckbox.checked = true;
+      selectAllCheckbox.indeterminate = false;
+    } else {
+      selectAllCheckbox.checked = false;
+      selectAllCheckbox.indeterminate = true;
+    }
+  }
+
+  // Update selected count display
+  function updateSelectedCount() {
+    const checkboxes = document.querySelectorAll('.scope-checkbox:checked');
+    const total = document.querySelectorAll('.scope-checkbox').length;
+    const selected = checkboxes.length;
+    const required = document.querySelectorAll('.scope-checkbox:checked:disabled').length;
+    const optional = selected - required;
+
+    const countText = document.getElementById('countText');
+    const approveBtn = document.getElementById('approveBtn');
+
+    if (selected === 0) {
+      countText.textContent = 'No permissions selected. Please select at least the required permissions to continue.';
+      approveBtn.disabled = true;
+    } else {
+      let text = `${selected} of ${total} permission${total !== 1 ? 's' : ''} selected`;
+      if (required > 0) {
+        text += ` (${required} required`;
+        if (optional > 0) {
+          text += `, ${optional} optional`;
+        }
+        text += ')';
+      }
+      countText.textContent = text;
+      approveBtn.disabled = false;
+    }
+  }
+
+  // Handle deny button
+  function denyAccess() {
+    document.getElementById('denyForm').submit();
+  }
+
+  // Validate form before submission
+  document.getElementById('consentForm').addEventListener('submit', function(e) {
+    const selectedScopes = document.querySelectorAll('.scope-checkbox:checked');
+    if (selectedScopes.length === 0) {
+      e.preventDefault();
+      alert('Please select at least one permission to authorize.');
+      return false;
+    }
+  });
+</script>
 </body>
 </html>

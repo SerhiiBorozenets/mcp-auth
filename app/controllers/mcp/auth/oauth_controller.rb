@@ -26,7 +26,7 @@ module Mcp
       # Consent approval endpoint
       def approve
         unless user_signed_in?
-          return redirect_to new_user_session_path
+          return redirect_to main_app.new_user_session_path
         end
 
         unless valid_authorization_params?
@@ -34,7 +34,33 @@ module Mcp
         end
 
         if params[:approved] == 'true'
-          generate_and_redirect_with_code
+          # Get selected scopes from checkboxes
+          selected_scopes = Array(params[:scopes]).compact.reject(&:blank?)
+
+          Rails.logger.info "[OAuth] User selected scopes: #{selected_scopes.inspect}"
+
+          # Validate selected scopes
+          if selected_scopes.blank?
+            Rails.logger.warn "[OAuth] No scopes selected"
+            return render_error('invalid_request', 'At least one scope must be selected')
+          end
+
+          # Get originally requested scopes
+          requested_scopes = params[:scope]&.split || []
+
+          # Get required scopes from the requested list
+          required_scopes = get_required_scopes(requested_scopes)
+
+          # Check all required scopes are selected
+          missing_required = required_scopes - selected_scopes
+          if missing_required.any?
+            Rails.logger.warn "[OAuth] Missing required scopes: #{missing_required.join(', ')}"
+            return render_error('invalid_request', 'Required scopes must be selected')
+          end
+          approved_scopes = Mcp::Auth::ScopeRegistry.validate_scopes(selected_scopes)
+          # Generate authorization code with ONLY approved scopes
+          approved_scope_string = approved_scopes.join(' ')
+          generate_and_redirect_with_code(approved_scope_string)
         else
           redirect_with_error('access_denied', 'User denied the request')
         end
@@ -173,9 +199,18 @@ module Mcp
         redirect_to main_app.new_user_session_path
       end
 
-      def generate_and_redirect_with_code
+      def generate_and_redirect_with_code(approved_scope = nil)
+        # Use approved scopes if provided, otherwise use requested scopes
+        final_scope = approved_scope.presence || params[:scope] || 'mcp:read mcp:write'
+
+        Rails.logger.info "[OAuth] Generating auth code with scope: #{final_scope}"
+
+        # Create a new params hash with the final scope
+        auth_params = params.to_unsafe_h.merge(scope: final_scope)
+
+        # Pass the params with approved scope to authorization service
         code = Services::AuthorizationService.generate_authorization_code(
-          params,
+          auth_params,
           user: current_user,
           org: current_org
         )
@@ -225,10 +260,13 @@ module Mcp
           return render_error('invalid_grant', 'Redirect URI mismatch')
         end
 
-        # Generate tokens with resource from authorization request
+        # Use the APPROVED scope from the authorization code, not the original request
+        Rails.logger.info "[OAuth] Token generation using scope from auth code: #{code_data[:scope]}"
+
+        # Generate tokens with the APPROVED scope from authorization code
         token_data = code_data.merge(resource: code_data[:resource] || params[:resource])
         token_response = Services::TokenService.generate_token_response(
-          token_data,
+          token_data,  # This includes the approved :scope from authorization code
           base_url: request.base_url
         )
 
@@ -324,13 +362,12 @@ module Mcp
 
       def show_consent_screen
         @client_name = get_client_name
-        @requested_scopes = parse_scopes
+        @requested_scopes = parse_and_validate_scopes
         @authorization_params = params.to_unsafe_h.slice(
           :response_type, :client_id, :redirect_uri, :scope,
           :state, :code_challenge, :code_challenge_method, :resource
         )
 
-        # Check if custom view should be used
         if use_custom_consent_view?
           render Rails.application.config.mcp_auth.consent_view_path, layout: 'application'
         else
@@ -357,19 +394,44 @@ module Mcp
         client&.client_name || params[:client_name] || params[:client_id] || 'Unknown Application'
       end
 
-      def parse_scopes
+      def parse_and_validate_scopes
         scope_string = params[:scope] || 'mcp:read mcp:write'
-        scopes = scope_string.split
+        requested = scope_string.split
 
-        scope_descriptions = {
-          'mcp:read' => 'Read access to your data and reports',
-          'mcp:write' => 'Create and modify data on your behalf',
-          'openid' => 'Access your basic profile information',
-          'profile' => 'Access your profile information',
-          'email' => 'Access your email address'
-        }
+        # Get ALL available scopes (what the gem owner registered)
+        all_available = Mcp::Auth::ScopeRegistry.available_scopes.keys
 
-        scopes.map { |scope| scope_descriptions[scope] || scope }
+        # Filter by user permissions if configured
+        if Mcp::Auth.configuration.validate_scope_for_user
+          all_available = all_available.select do |scope|
+            Mcp::Auth.configuration.validate_scope_for_user.call(
+              current_user,
+              current_org,
+              scope
+            )
+          end
+        end
+
+        # Format all available scopes for display
+        # Mark as pre-selected if they were in the original request
+        all_scopes = Mcp::Auth::ScopeRegistry.format_for_display(all_available)
+
+        # Add a flag to indicate if scope was originally requested
+        all_scopes.map do |scope_data|
+          scope_data.merge(
+            pre_selected: requested.include?(scope_data[:key])
+          )
+        end
+      end
+
+      # Get required scopes from requested scopes list
+      def get_required_scopes(requested_scopes)
+        validated = Mcp::Auth::ScopeRegistry.validate_scopes(requested_scopes)
+
+        validated.select do |scope|
+          metadata = Mcp::Auth::ScopeRegistry.scope_metadata(scope)
+          metadata[:required]
+        end
       end
 
       # === Headers & Security ===

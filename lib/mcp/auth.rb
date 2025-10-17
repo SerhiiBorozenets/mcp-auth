@@ -33,7 +33,8 @@ module Mcp
                     :consent_view_path,
                     :use_custom_consent_view,
                     :mcp_server_path,
-                    :mcp_docs_url
+                    :mcp_docs_url,
+                    :validate_scope_for_user
 
       def initialize
         @oauth_secret = nil
@@ -46,8 +47,27 @@ module Mcp
         @current_org_method = :current_org
         @consent_view_path = 'mcp/auth/consent'
         @use_custom_consent_view = false
-        @mcp_server_path = '/mcp/api'  # Default path
+        @mcp_server_path = '/mcp/api'
         @mcp_docs_url = nil
+        @validate_scope_for_user = nil
+      end
+
+      # Register a custom scope for your application
+      def register_scope(scope_key, name:, description:, required: false)
+        Mcp::Auth::ScopeRegistry.register_scope(
+          scope_key,
+          name: name,
+          description: description,
+          required: required
+        )
+      end
+
+      # Get MCP documentation URL
+      def documentation_url(base_url = nil)
+        return @mcp_docs_url if @mcp_docs_url.present? && @mcp_docs_url.start_with?('http')
+
+        docs_path = @mcp_docs_url.presence || "#{@mcp_server_path}/docs"
+        base_url ? "#{base_url}#{docs_path}" : docs_path
       end
     end
 
@@ -83,3 +103,7 @@ module Mcp
     end
   end
 end
+
+require 'mcp/auth/scope_registry'
+require 'mcp/auth/services/token_service'
+require 'mcp/auth/services/authorization_service'

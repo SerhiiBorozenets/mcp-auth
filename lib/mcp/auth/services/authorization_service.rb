@@ -8,7 +8,6 @@ module Mcp
           # Generate authorization code with PKCE support
           def generate_authorization_code(params, user:, org:)
             code = SecureRandom.hex(32)
-
             authorization_code = Mcp::Auth::AuthorizationCode.create!(
               code: code,
               client_id: params[:client_id],
