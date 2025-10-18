@@ -2,10 +2,31 @@
 
 module Mcp
   module Auth
+    # ScopeRegistry manages OAuth scopes for MCP Auth
+    #
+    # By default, provides basic MCP scopes (mcp:read, mcp:write) automatically.
+    # Applications can register custom scopes which will replace the defaults.
+    #
+    # Example:
+    #   Mcp::Auth::ScopeRegistry.register_scope('mcp:tools',
+    #     name: 'Tool Execution',
+    #     description: 'Execute tools and actions',
+    #     required: false
+    #   )
     class ScopeRegistry
       class << self
-        # Default MCP scopes - minimal set
-        def default_scopes
+        # Custom scopes registered by the application
+        def custom_scopes
+          @custom_scopes ||= {}
+        end
+
+        # All available scopes
+        # If no scopes are registered, returns basic MCP scopes for backwards compatibility
+        def available_scopes
+          return custom_scopes unless custom_scopes.empty?
+
+          # Fallback: If no scopes registered, use basic MCP scopes
+          # This ensures backwards compatibility
           {
             'mcp:read' => {
               name: 'Read Access',
@@ -20,16 +41,6 @@ module Mcp
           }
         end
 
-        # Custom scopes registered by the application
-        def custom_scopes
-          @custom_scopes ||= {}
-        end
-
-        # All available scopes (default + custom)
-        def available_scopes
-          default_scopes.merge(custom_scopes)
-        end
-
         # Register a custom scope
         def register_scope(scope_key, name:, description:, required: false)
           custom_scopes[scope_key.to_s] = {
@@ -39,8 +50,8 @@ module Mcp
           }
         end
 
-        # Clear custom scopes (useful for testing)
-        def clear_custom_scopes!
+        # Clear all registered scopes (useful for testing)
+        def clear_scopes!
           @custom_scopes = {}
         end
 
@@ -60,7 +71,10 @@ module Mcp
 
         # Validate and filter requested scopes
         def validate_scopes(requested_scopes)
-          return %w[mcp:read mcp:write] if requested_scopes.blank?
+          # If no scopes requested, return all required scopes
+          if requested_scopes.blank?
+            return available_scopes.select { |_, meta| meta[:required] }.keys
+          end
 
           scopes = requested_scopes.is_a?(String) ? requested_scopes.split : requested_scopes
 
@@ -86,6 +100,12 @@ module Mcp
               required: metadata[:required]
             }
           end
+        end
+
+        # Get default scopes string for a client
+        def default_scope_string
+          # Return all registered scopes, or empty string if none
+          available_scopes.keys.join(' ')
         end
       end
     end

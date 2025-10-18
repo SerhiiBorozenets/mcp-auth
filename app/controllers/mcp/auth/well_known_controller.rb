@@ -14,7 +14,7 @@ module Mcp
         metadata = {
           resource: resource_url,
           authorization_servers: [authorization_server_url],
-          scopes_supported: %w[mcp:read mcp:write],
+          scopes_supported: Mcp::Auth::ScopeRegistry.available_scopes.keys,
           bearer_methods_supported: %w[header],
           resource_documentation: mcp_documentation_url,
           resource_parameter_supported: true, # RFC 8707 support
@@ -26,6 +26,9 @@ module Mcp
 
       # RFC 8414: OAuth 2.0 Authorization Server Metadata
       def authorization_server
+        # Get all registered scopes plus openid, profile, email for OIDC
+        supported_scopes = Mcp::Auth::ScopeRegistry.available_scopes.keys
+
         metadata = {
           issuer: authorization_server_url,
           authorization_endpoint: "#{authorization_server_url}/oauth/authorize",
@@ -35,7 +38,7 @@ module Mcp
           introspection_endpoint: "#{authorization_server_url}/oauth/introspect",
 
           # Supported features
-          scopes_supported: %w[mcp:read mcp:write openid profile email],
+          scopes_supported: supported_scopes.uniq,
           response_types_supported: %w[code],
           grant_types_supported: %w[authorization_code refresh_token],
           code_challenge_methods_supported: %w[S256], # PKCE required
@@ -59,6 +62,9 @@ module Mcp
 
       # OpenID Connect Discovery
       def openid_configuration
+        # Get all registered scopes plus openid, profile, email
+        supported_scopes = Mcp::Auth::ScopeRegistry.available_scopes.keys + %w[openid profile email]
+
         metadata = {
           issuer: authorization_server_url,
           authorization_endpoint: "#{authorization_server_url}/oauth/authorize",
@@ -67,7 +73,7 @@ module Mcp
           jwks_uri: "#{authorization_server_url}/.well-known/jwks.json",
           userinfo_endpoint: "#{authorization_server_url}/oauth/userinfo",
 
-          scopes_supported: %w[openid mcp:read mcp:write profile email],
+          scopes_supported: supported_scopes.uniq,
           response_types_supported: %w[code],
           grant_types_supported: %w[authorization_code refresh_token],
           code_challenge_methods_supported: %w[S256],

@@ -8,6 +8,10 @@ module Mcp
           # Generate authorization code with PKCE support
           def generate_authorization_code(params, user:, org:)
             code = SecureRandom.hex(32)
+
+            # Use provided scope or default to all registered scopes
+            scope = params[:scope].presence || Mcp::Auth::ScopeRegistry.default_scope_string
+
             authorization_code = Mcp::Auth::AuthorizationCode.create!(
               code: code,
               client_id: params[:client_id],
@@ -15,7 +19,7 @@ module Mcp
               code_challenge: params[:code_challenge],
               code_challenge_method: params[:code_challenge_method],
               resource: params[:resource],
-              scope: params[:scope] || 'mcp:read mcp:write',
+              scope: scope,
               user: user,
               org: org,
               expires_at: authorization_code_lifetime.minutes.from_now

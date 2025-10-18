@@ -53,7 +53,7 @@ module Mcp
         self.client_secret ||= SecureRandom.hex(32)
         self.grant_types ||= %w[authorization_code refresh_token]
         self.response_types ||= %w[code]
-        self.scope ||= 'mcp:read mcp:write'
+        self.scope ||= Mcp::Auth::ScopeRegistry.default_scope_string
       end
     end
   end

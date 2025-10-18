@@ -80,11 +80,10 @@ Mcp::Auth.configure do |config|
   # SCOPE CONFIGURATION
   # ============================================================================
 
-  # By default, MCP Auth includes only two scopes:
-  #   - mcp:read (required) - Read your data and resources
-  #   - mcp:write - Create and modify data on your behalf
+  # MCP Auth starts with NO default scopes. You must register the scopes
+  # your application needs. This gives you complete control over permissions.
   #
-  # Register additional scopes that your application needs:
+  # Register scopes that your application needs:
   #
   # Syntax:
   #   config.register_scope 'scope_key',
@@ -92,7 +91,22 @@ Mcp::Auth.configure do |config|
   #     description: 'What this scope allows (shown to users)',
   #     required: false  # Set to true if scope is always required
   #
-  # Examples:
+  # IMPORTANT: At least one scope should be registered for OAuth to work properly.
+  # If you don't register any scopes, authorization will fail.
+
+  # Common MCP scopes - UNCOMMENT THE ONES YOU NEED:
+
+  # Basic read access - typically required
+  config.register_scope 'mcp:read',
+                        name: 'Read Access',
+                        description: 'Read your data and resources',
+                        required: true  # Usually required for MCP to function
+
+  # Write access - allows modifications
+  config.register_scope 'mcp:write',
+                        name: 'Write Access',
+                        description: 'Create and modify data on your behalf',
+                        required: false
 
   # Execute tools and automated actions
   # config.register_scope 'mcp:tools',
@@ -153,7 +167,7 @@ Mcp::Auth.configure do |config|
   #     # Check if organization plan includes export
   #     org&.plan&.includes_export?
   #   else
-  #     true  # Allow all other scopes (mcp:read, mcp:write, etc.)
+  #     true  # Allow all other scopes
   #   end
   # end
 
@@ -181,6 +195,7 @@ Mcp::Auth.configure do |config|
   #        * :name - Human-readable name (e.g., 'Read Access')
   #        * :description - What the scope allows
   #        * :required - Whether scope is required (true/false)
+  #        * :pre_selected - Whether scope was in the original request
   #    - @authorization_params: Hash of OAuth parameters to preserve
 end
 

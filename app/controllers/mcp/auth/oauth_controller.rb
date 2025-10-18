@@ -200,8 +200,11 @@ module Mcp
       end
 
       def generate_and_redirect_with_code(approved_scope = nil)
-        # Use approved scopes if provided, otherwise use requested scopes
-        final_scope = approved_scope.presence || params[:scope] || 'mcp:read mcp:write'
+        # Use approved scopes if provided, otherwise use requested scopes,
+        # otherwise use all registered scopes
+        final_scope = approved_scope.presence ||
+                      params[:scope].presence ||
+                      Mcp::Auth::ScopeRegistry.default_scope_string
 
         Rails.logger.info "[OAuth] Generating auth code with scope: #{final_scope}"
 
@@ -305,7 +308,7 @@ module Mcp
           redirect_uris: extract_redirect_uris,
           grant_types: params[:grant_types] || %w[authorization_code refresh_token],
           response_types: params[:response_types] || %w[code],
-          scope: params[:scope] || 'mcp:read mcp:write',
+          scope: params[:scope] || Mcp::Auth::ScopeRegistry.default_scope_string,
           client_name: params[:client_name] || 'MCP Client',
           client_uri: params[:client_uri]
         }
@@ -395,7 +398,8 @@ module Mcp
       end
 
       def parse_and_validate_scopes
-        scope_string = params[:scope] || 'mcp:read mcp:write'
+        # Get requested scopes, or default to all registered scopes
+        scope_string = params[:scope].presence || Mcp::Auth::ScopeRegistry.default_scope_string
         requested = scope_string.split
 
         # Get ALL available scopes (what the gem owner registered)
