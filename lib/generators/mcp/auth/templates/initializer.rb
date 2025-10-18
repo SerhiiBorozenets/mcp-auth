@@ -80,9 +80,6 @@ Mcp::Auth.configure do |config|
   # SCOPE CONFIGURATION
   # ============================================================================
 
-  # MCP Auth starts with NO default scopes. You must register the scopes
-  # your application needs. This gives you complete control over permissions.
-  #
   # Register scopes that your application needs:
   #
   # Syntax:
@@ -92,9 +89,6 @@ Mcp::Auth.configure do |config|
   #     required: false  # Set to true if scope is always required
   #
   # IMPORTANT: At least one scope should be registered for OAuth to work properly.
-  # If you don't register any scopes, authorization will fail.
-
-  # Common MCP scopes - UNCOMMENT THE ONES YOU NEED:
 
   # Basic read access - typically required
   config.register_scope 'mcp:read',
