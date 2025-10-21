@@ -40,7 +40,7 @@ module Mcp
             user_data = fetch_user_data(data)
 
             # RFC 8707: Use provided resource or default to MCP API endpoint
-            audience = normalize_resource_uri(data[:resource].presence || "#{base_url}/mcp/api")
+            audience = normalize_resource_uri(data[:resource].presence || "#{base_url}/mcp")
 
             # Calculate expiration time
             exp_time = data[:expires_at] ? data[:expires_at].to_i : (Time.current.to_i + token_lifetime)

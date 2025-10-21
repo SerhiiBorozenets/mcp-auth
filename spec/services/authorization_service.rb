@@ -12,7 +12,7 @@ RSpec.describe Mcp::Auth::Services::AuthorizationService do
       redirect_uri: 'http://localhost:3000/callback',
       code_challenge: Base64.urlsafe_encode64(Digest::SHA256.digest('test_verifier'), padding: false),
       code_challenge_method: 'S256',
-      resource: 'http://localhost:3000/mcp/api',
+      resource: 'http://localhost:3000/mcp',
       scope: 'mcp:read mcp:write'
     }
   end

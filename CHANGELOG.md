@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Protected Resource Metadata (RFC 9728)
 - Resource Indicators support (RFC 8707) for token audience binding
 - OpenID Connect Discovery support
-- Automatic middleware for protecting `/mcp/api/*` routes
+- Automatic middleware for protecting `/mcp/*` routes
 - JWT access tokens with proper audience validation
 - Refresh token rotation for enhanced security
 - Database-backed token storage for revocation support

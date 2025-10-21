@@ -44,10 +44,10 @@ module Mcp
         @authorization_code_lifetime = 1800 # 30 minutes
         @fetch_user_data = nil
         @current_user_method = :current_user
-        @current_org_method = :current_org
+        @current_org_method = nil
         @consent_view_path = 'mcp/auth/consent'
         @use_custom_consent_view = false
-        @mcp_server_path = '/mcp/api'
+        @mcp_server_path = '/mcp'
         @mcp_docs_url = nil
         @validate_scope_for_user = nil
       end

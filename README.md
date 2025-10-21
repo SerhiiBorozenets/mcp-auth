@@ -169,11 +169,11 @@ Mcp::Auth.configure do |config|
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)
   
   # MCP Server Path - where your MCP server is mounted
-  # Change this if your MCP server is NOT at '/mcp/api'
-  config.mcp_server_path = ENV.fetch('MCP_SERVER_PATH', '/mcp/api')
+  # Change this if your MCP server is NOT at '/mcp'
+  config.mcp_server_path = ENV.fetch('MCP_SERVER_PATH', '/mcp')
   
   # MCP Documentation URL (optional)
-  # Default: {mcp_server_path}/docs (e.g., /mcp/api/docs)
+  # Default: {mcp_server_path}/docs (e.g., /mcp/docs)
   # Can be a path or full URL:
   config.mcp_docs_url = ENV.fetch('MCP_DOCS_URL', nil)
   # Examples:
@@ -232,7 +232,7 @@ end
 ```bash
 # .env
 MCP_HMAC_SECRET=your_secure_random_string_here
-MCP_SERVER_PATH=/mcp/api           # or /api/mcp, /assistant/api, etc.
+MCP_SERVER_PATH=/mcp               # or /api/mcp, /assistant/api, etc.
 MCP_DOCS_URL=/docs/mcp             # optional
 ```
 
@@ -271,12 +271,12 @@ MCP Auth provides these endpoints automatically:
 MCP Auth automatically protects routes matching your configured `mcp_server_path`:
 
 ```ruby
-# If mcp_server_path = '/mcp/api'
-# All routes starting with /mcp/api/* require OAuth tokens
+# If mcp_server_path = '/mcp'
+# All routes starting with /mcp/* require OAuth tokens
 
-GET /mcp/api/tools        # Protected ✅
-GET /mcp/api/resources    # Protected ✅
-GET /mcp/api/prompts      # Protected ✅
+GET /mcp/tools        # Protected ✅
+GET /mcp/resources    # Protected ✅
+GET /mcp/prompts      # Protected ✅
 GET /other/endpoint       # Not protected ❌
 ```
 
@@ -335,7 +335,7 @@ GET /oauth/authorize?
   state=random_state_string&
   code_challenge=CODE_CHALLENGE&
   code_challenge_method=S256&
-  resource=https://example.com/mcp/api
+  resource=https://example.com/mcp
 ```
 
 User will see consent screen and approve/deny access.
@@ -352,7 +352,7 @@ curl -X POST https://example.com/oauth/token \
   -d "redirect_uri=https://client.example.com/callback" \
   -d "code_verifier=CODE_VERIFIER" \
   -d "client_id=550e8400-e29b-41d4-a716-446655440000" \
-  -d "resource=https://example.com/mcp/api"
+  -d "resource=https://example.com/mcp"
 ```
 
 Response:
@@ -369,7 +369,7 @@ Response:
 #### 4. Access Protected Resources
 
 ```bash
-curl https://example.com/mcp/api/tools \
+curl https://example.com/mcp/tools \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIs..."
 ```
 
@@ -447,7 +447,7 @@ config.mcp_docs_url = '/docs/mcp-api'
 config.mcp_docs_url = 'https://docs.example.com/mcp-api'
 
 # Default (if not set): {mcp_server_path}/docs
-# Example: /mcp/api/docs
+# Example: /mcp/docs
 ```
 
 ### Custom Consent Screen
@@ -561,7 +561,7 @@ RSpec.describe 'MCP API', type: :request do
       scope: 'mcp:read mcp:write',
       user_id: user.id,
       org_id: org.id,
-      resource: 'http://localhost:3000/mcp/api'
+      resource: 'http://localhost:3000/mcp'
     }
     
     Mcp::Auth::Services::TokenService.generate_access_token(
@@ -571,7 +571,7 @@ RSpec.describe 'MCP API', type: :request do
   end
   
   it 'allows authenticated requests' do
-    get '/mcp/api/tools', headers: {
+    get '/mcp/tools', headers: {
       'Authorization' => "Bearer #{access_token}"
     }
     
@@ -579,7 +579,7 @@ RSpec.describe 'MCP API', type: :request do
   end
   
   it 'rejects unauthenticated requests' do
-    get '/mcp/api/tools'
+    get '/mcp/tools'
     
     expect(response).to have_http_status(:unauthorized)
   end
@@ -707,10 +707,10 @@ end
 
 ```ruby
 # config/initializers/mcp_auth.rb
-config.mcp_server_path = '/mcp/api'  # Must match FastMCP mount point
+config.mcp_server_path = '/mcp'  # Must match FastMCP mount point
 
 # When generating tokens
-resource: 'https://example.com/mcp/api'  # Must match mcp_server_path
+resource: 'https://example.com/mcp'  # Must match mcp_server_path
 ```
 
 ### Token Validation Fails

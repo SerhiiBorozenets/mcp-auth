@@ -7,6 +7,7 @@ mcp-auth/
 │   ├── mcp-auth.gemspec                     # Gem specification
 │   ├── Gemfile                              # Development dependencies
 │   ├── README.md                            # Main documentation
+│   ├── TESTING.md                           # Testing instructions
 │   ├── LICENSE.txt                          # MIT License
 │   ├── CHANGELOG.md                         # Version history
 │   ├── CONTRIBUTING.md                      # Contribution guidelines

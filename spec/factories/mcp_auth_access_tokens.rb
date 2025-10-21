@@ -9,7 +9,7 @@ FactoryBot.define do
     token { SecureRandom.hex(32) }
     client_id { oauth_client.client_id }
     scope { 'mcp:read mcp:write' }
-    resource { 'http://localhost:3000/mcp/api' }
+    resource { 'http://localhost:3000/mcp' }
     expires_at { 1.hour.from_now }
   end
 end

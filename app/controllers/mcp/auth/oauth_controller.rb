@@ -472,6 +472,23 @@ module Mcp
         Rails.logger.error "[OAuth] Error: #{error_response.inspect}"
         render json: error_response, status: :bad_request, content_type: 'application/json'
       end
+
+      def current_org
+        # If current_org_method is nil in config, always return nil
+        return nil if Mcp::Auth.configuration.current_org_method.nil?
+
+        # Otherwise, call the configured method
+        method_name = Mcp::Auth.configuration.current_org_method
+
+        # If it's a proc, execute it in this controller's context
+        return instance_exec(&method_name) if method_name.respond_to?(:call)
+
+        # If it's a symbol/string, call it (from parent ApplicationController)
+        super if defined?(super)
+      rescue NoMethodError
+        # Method doesn't exist in parent, return nil
+        nil
+      end
     end
   end
 end

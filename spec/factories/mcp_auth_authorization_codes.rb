@@ -12,7 +12,7 @@ FactoryBot.define do
     code_challenge { Base64.urlsafe_encode64(Digest::SHA256.digest('test_verifier'), padding: false) }
     code_challenge_method { 'S256' }
     scope { 'mcp:read mcp:write' }
-    resource { 'http://localhost:3000/mcp/api' }
+    resource { 'http://localhost:3000/mcp' }
     expires_at { 30.minutes.from_now }
   end
 end

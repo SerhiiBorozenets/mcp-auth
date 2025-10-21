@@ -20,9 +20,9 @@ Mcp::Auth.configure do |config|
 
   # MCP Server Path - where your MCP server is mounted
   # This MUST match the path where you mount FastMCP or your MCP server
-  # Default: '/mcp/api'
+  # Default: '/mcp'
   # Examples: '/api/mcp', '/v1/assistant', '/assistant/api'
-  config.mcp_server_path = ENV.fetch('MCP_SERVER_PATH', '/mcp/api')
+  config.mcp_server_path = ENV.fetch('MCP_SERVER_PATH', '/mcp')
 
   # MCP Documentation URL - link to your MCP server documentation
   # Can be a full URL (https://docs.example.com/mcp) or a path (/docs/mcp)

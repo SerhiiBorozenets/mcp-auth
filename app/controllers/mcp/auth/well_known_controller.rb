@@ -26,7 +26,6 @@ module Mcp
 
       # RFC 8414: OAuth 2.0 Authorization Server Metadata
       def authorization_server
-        # Get all registered scopes plus openid, profile, email for OIDC
         supported_scopes = Mcp::Auth::ScopeRegistry.available_scopes.keys
 
         metadata = {
@@ -105,9 +104,18 @@ module Mcp
       end
 
       def canonical_resource_url
-        # Use configured MCP server path, or default to /mcp/api
-        mcp_path = Mcp::Auth.configuration&.mcp_server_path || '/mcp/api'
-        "#{request.scheme}://#{request.host_with_port}#{mcp_path}"
+        # Use configured MCP server path
+        mcp_path = Mcp::Auth.configuration&.mcp_server_path || '/mcp'
+
+        # Ensure path starts with /
+        mcp_path = "/#{mcp_path}" unless mcp_path.start_with?('/')
+
+        # Remove trailing slash if present
+        mcp_path = mcp_path.chomp('/')
+
+        # Build the full resource URL
+        base_url = "#{request.scheme}://#{request.host_with_port}"
+        "#{base_url}#{mcp_path}"
       end
 
       def mcp_documentation_url
@@ -123,7 +131,10 @@ module Mcp
         end
 
         # Default: append /docs to the MCP server path
-        mcp_path = Mcp::Auth.configuration&.mcp_server_path || '/mcp/api'
+        mcp_path = Mcp::Auth.configuration&.mcp_server_path || '/mcp'
+        mcp_path = "/#{mcp_path}" unless mcp_path.start_with?('/')
+        mcp_path = mcp_path.chomp('/')
+
         "#{request.base_url}#{mcp_path}/docs"
       end
 
