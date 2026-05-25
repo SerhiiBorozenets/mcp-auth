@@ -99,49 +99,38 @@ module Mcp
       end
 
       # RFC 7009: Token Revocation
+      # Requires client authentication; only revokes tokens that belong to the
+      # authenticated client (otherwise still returns 200 to avoid leaking which
+      # tokens exist — per RFC 7009 §2.2).
       def revoke
-        token = params[:token]
+        client = authenticate_client
+        return render_error('invalid_client', 'Client authentication failed', status: :unauthorized) unless client
 
+        token = params[:token]
         if token.blank?
           return render_error('invalid_request', 'Token parameter is required')
         end
 
-        # Try refresh token first
-        revoked = Services::TokenService.revoke_refresh_token(token)
+        revoked = revoke_token_for_client(token, client, hint: params[:token_type_hint])
 
-        # Try access token if not found
-        unless revoked
-          access_token = Mcp::Auth::AccessToken.find_by(token: token)
-          if access_token
-            access_token.destroy
-            revoked = true
-          end
-        end
-
-        # RFC 7009: Always return 200 OK
-        Rails.logger.info "[OAuth] Token revocation: #{revoked ? 'success' : 'not found'}"
+        # RFC 7009: Always return 200 OK regardless of whether the token was found.
+        Rails.logger.info "[OAuth] Token revocation by client=#{client.client_id}: #{revoked ? 'success' : 'not found / not owned'}"
         head :ok
       end
 
       # RFC 7662: Token Introspection
+      # Requires client authentication. Tokens not owned by the authenticated
+      # client are reported as `{active: false}` to prevent token-scanning.
       def introspect
-        token = params[:token]
+        client = authenticate_client
+        return render_error('invalid_client', 'Client authentication failed', status: :unauthorized) unless client
 
+        token = params[:token]
         if token.blank?
           return render json: { active: false }, content_type: 'application/json'
         end
 
-        # Try as JWT access token
-        payload = Services::TokenService.validate_access_token(token)
-
-        response = if payload
-                     build_access_token_introspection(payload)
-                   else
-                     # Try as refresh token
-                     refresh_data = Services::TokenService.validate_refresh_token(token)
-                     refresh_data ? build_refresh_token_introspection(refresh_data) : { active: false }
-                   end
-
+        response = introspect_token_for_client(token, client)
         render json: response, content_type: 'application/json'
       end
 
@@ -239,6 +228,8 @@ module Mcp
         redirect_uri = URI.parse(params[:redirect_uri])
         query_params = { error: error, error_description: description }
         query_params[:state] = params[:state] if params[:state]
+        # RFC 9207: iss MUST be included in authorization responses, including errors.
+        query_params[:iss] = authorization_server_url
 
         redirect_uri.query = URI.encode_www_form(query_params)
         redirect_to redirect_uri.to_s, allow_other_host: true
@@ -333,6 +324,71 @@ module Mcp
           client_name: client.client_name,
           client_uri: client.client_uri
         }.compact
+      end
+
+      # === Client Authentication (RFC 6749 §2.3, used by revoke + introspect) ===
+
+      # Accepts client credentials from either HTTP Basic auth or form params.
+      # Returns the OauthClient instance on success, nil on failure.
+      def authenticate_client
+        client_id, client_secret = extract_client_credentials
+        return nil if client_id.blank? || client_secret.blank?
+
+        client = Mcp::Auth::OauthClient.find_by(client_id: client_id)
+        return nil unless client
+        return nil unless ActiveSupport::SecurityUtils.secure_compare(client.client_secret.to_s, client_secret.to_s)
+
+        client
+      end
+
+      def extract_client_credentials
+        if (auth = request.authorization) && auth.start_with?('Basic ')
+          decoded = Base64.decode64(auth.split(' ', 2).last)
+          decoded.split(':', 2)
+        else
+          [params[:client_id], params[:client_secret]]
+        end
+      end
+
+      # RFC 7009: revoke token only if it belongs to the requesting client.
+      # token_type_hint is a hint, not a constraint — try both regardless.
+      def revoke_token_for_client(token, client, hint: nil)
+        if hint == 'refresh_token'
+          revoke_refresh_for_client(token, client) || revoke_access_for_client(token, client)
+        else
+          revoke_access_for_client(token, client) || revoke_refresh_for_client(token, client)
+        end
+      end
+
+      def revoke_access_for_client(token, client)
+        access_token = Mcp::Auth::AccessToken.find_by(token: token, client_id: client.client_id)
+        return false unless access_token
+
+        access_token.destroy
+        true
+      end
+
+      def revoke_refresh_for_client(token, client)
+        refresh_token = Mcp::Auth::RefreshToken.find_by(token: token, client_id: client.client_id)
+        return false unless refresh_token
+
+        refresh_token.destroy
+        true
+      end
+
+      # RFC 7662: only describe tokens owned by the authenticated client.
+      def introspect_token_for_client(token, client)
+        payload = Services::TokenService.validate_access_token(token)
+        if payload && payload[:client_id] == client.client_id
+          build_access_token_introspection(payload)
+        else
+          refresh_data = Services::TokenService.validate_refresh_token(token)
+          if refresh_data && refresh_data[:client_id] == client.client_id
+            build_refresh_token_introspection(refresh_data)
+          else
+            { active: false }
+          end
+        end
       end
 
       # === Token Introspection ===
@@ -463,14 +519,14 @@ module Mcp
 
       # === Error Handling ===
 
-      def render_error(error, description)
+      def render_error(error, description, status: :bad_request)
         error_response = {
           error: error,
           error_description: description
         }
 
         Rails.logger.error "[OAuth] Error: #{error_response.inspect}"
-        render json: error_response, status: :bad_request, content_type: 'application/json'
+        render json: error_response, status: status, content_type: 'application/json'
       end
 
       def current_org
