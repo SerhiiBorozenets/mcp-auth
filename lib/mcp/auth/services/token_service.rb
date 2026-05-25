@@ -5,12 +5,13 @@ module Mcp
     module Services
       class TokenService
         class << self
-          # Validate access token with optional resource verification (RFC 8707)
+          # Validate access token with optional resource verification (RFC 8707).
+          # Supports HS256, RS256, and ES256 — algorithm comes from configuration.
           def validate_access_token(token, resource: nil)
             return nil if token.blank?
 
             begin
-              payload = JWT.decode(token, oauth_secret, true, { algorithm: 'HS256' }).first
+              payload = JWT.decode(token, verification_key, true, { algorithm: signing_algorithm }).first
 
               # Check expiration manually to ensure proper handling
               if payload['exp']
@@ -59,7 +60,8 @@ module Mcp
               exp: exp_time
             }
 
-            token = JWT.encode(payload, oauth_secret, 'HS256')
+            jwt_headers = signing_kid ? { kid: signing_kid } : {}
+            token = JWT.encode(payload, signing_key, signing_algorithm, jwt_headers)
 
             # Store token in database for revocation support
             store_access_token(token, data, audience)
@@ -145,7 +147,103 @@ module Mcp
             raise
           end
 
+          # Public key used to sign new JWTs. Configured via Mcp::Auth.configure;
+          # built lazily so apps that stay on HS256 don't have to set anything.
+          def signing_public_key
+            return nil unless asymmetric_signing?
+
+            cached_public_key
+          end
+
+          # JWK identifier for the current signing key — included as `kid` in
+          # JWT headers and the JWKS entry. Falls back to JWT::JWK's
+          # auto-derived thumbprint when no explicit kid is configured.
+          def signing_kid
+            return nil unless asymmetric_signing?
+
+            Mcp::Auth.configuration&.token_signing_kid.presence || jwk.kid
+          end
+
+          # JWK for the active public key, suitable for the JWKS endpoint.
+          # Returns nil for HS256 (HMAC keys are never published).
+          def signing_jwk_export
+            return nil unless asymmetric_signing?
+
+            exported = jwk.export
+            exported[:kid] = signing_kid
+            exported[:alg] = signing_algorithm
+            exported[:use] = 'sig'
+            exported
+          end
+
           private
+
+          def asymmetric_signing?
+            Mcp::Auth.configuration&.asymmetric_signing? || false
+          end
+
+          def signing_algorithm
+            Mcp::Auth.configuration&.token_signing_algorithm || 'HS256'
+          end
+
+          # Key used to SIGN outgoing JWTs (HMAC secret for HS256, private key
+          # for RS256/ES256).
+          def signing_key
+            asymmetric_signing? ? cached_private_key : oauth_secret
+          end
+
+          # Key used to VERIFY incoming JWTs (HMAC secret for HS256, public key
+          # for RS256/ES256). For asymmetric algorithms callers may eventually
+          # want per-token key lookup via the JWT `kid` header, but for now we
+          # only have one active key so a single value is fine.
+          def verification_key
+            asymmetric_signing? ? cached_public_key : oauth_secret
+          end
+
+          def cached_private_key
+            @cached_private_key ||= load_private_key
+          end
+
+          def cached_public_key
+            @cached_public_key ||= load_public_key
+          end
+
+          def jwk
+            @jwk ||= JWT::JWK.new(cached_public_key)
+          end
+
+          def load_private_key
+            raw = Mcp::Auth.configuration&.token_signing_private_key
+            raise 'token_signing_private_key is not configured' if raw.blank?
+
+            raw.is_a?(OpenSSL::PKey::PKey) ? raw : OpenSSL::PKey.read(raw)
+          end
+
+          def load_public_key
+            raw = Mcp::Auth.configuration&.token_signing_public_key
+            if raw.present?
+              return raw if raw.is_a?(OpenSSL::PKey::PKey)
+
+              return OpenSSL::PKey.read(raw)
+            end
+
+            # Derive from the private key when an explicit public key isn't given.
+            private_key = cached_private_key
+            case private_key
+            when OpenSSL::PKey::RSA then private_key.public_key
+            when OpenSSL::PKey::EC  then ec_public_key_from(private_key)
+            else
+              raise "Unsupported private key type for #{signing_algorithm}: #{private_key.class}"
+            end
+          end
+
+          # OpenSSL::PKey::EC#public_key returns the bare point, not a usable
+          # PKey instance. Build a public-only EC key so JWT::JWK can export it.
+          def ec_public_key_from(private_key)
+            pub = OpenSSL::PKey::EC.new(private_key.group)
+            pub.public_key = private_key.public_key
+            pub
+          end
 
           def oauth_secret
             secret = Mcp::Auth.configuration&.oauth_secret

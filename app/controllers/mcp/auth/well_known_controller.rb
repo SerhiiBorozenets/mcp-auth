@@ -78,16 +78,19 @@ module Mcp
           code_challenge_methods_supported: %w[S256],
           token_endpoint_auth_methods_supported: %w[client_secret_basic client_secret_post none],
           subject_types_supported: %w[public],
-          id_token_signing_alg_values_supported: %w[HS256]
+          id_token_signing_alg_values_supported: [Mcp::Auth.configuration&.token_signing_algorithm || 'HS256']
         }
 
         render json: metadata, status: :ok, content_type: 'application/json'
       end
 
-      # JWKS endpoint (empty for HMAC)
+      # JWKS endpoint. Returns the active public key as a JWK when the
+      # configured signing algorithm is asymmetric (RS256/ES256). HMAC keys
+      # are NEVER published — for HS256 this stays an empty key set.
       def jwks
-        keys = { keys: [] }
-        render json: keys, status: :ok, content_type: 'application/json'
+        jwk = Mcp::Auth::Services::TokenService.signing_jwk_export
+        keys = jwk ? [jwk] : []
+        render json: { keys: keys }, status: :ok, content_type: 'application/json'
       end
 
       private

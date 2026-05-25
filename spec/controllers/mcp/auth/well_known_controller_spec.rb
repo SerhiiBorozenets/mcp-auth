@@ -5,6 +5,14 @@ require 'rails_helper'
 RSpec.describe Mcp::Auth::WellKnownController, type: :controller do
   routes { Mcp::Auth::Engine.routes }
 
+  # Reset TokenService's cached keys before each example so config changes
+  # in one example don't leak into the next.
+  before do
+    Mcp::Auth::Services::TokenService.instance_variable_set(:@cached_private_key, nil)
+    Mcp::Auth::Services::TokenService.instance_variable_set(:@cached_public_key, nil)
+    Mcp::Auth::Services::TokenService.instance_variable_set(:@jwk, nil)
+  end
+
   describe 'GET #protected_resource' do
     it 'returns protected resource metadata' do
       get :protected_resource
@@ -55,13 +63,65 @@ RSpec.describe Mcp::Auth::WellKnownController, type: :controller do
   end
 
   describe 'GET #jwks' do
-    it 'returns empty JWKS' do
+    it 'returns an empty key set when HS256 is configured (HMAC keys are never published)' do
       get :jwks
 
       expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['keys']).to eq([])
+    end
 
-      json = JSON.parse(response.body)
-      expect(json['keys']).to eq([])
+    context 'when RS256 signing is enabled' do
+      let(:rsa_key) { OpenSSL::PKey::RSA.generate(2048) }
+
+      before do
+        Mcp::Auth.configure do |c|
+          c.token_signing_algorithm = 'RS256'
+          c.token_signing_private_key = rsa_key.to_pem
+        end
+      end
+
+      after do
+        Mcp::Auth.configure do |c|
+          c.token_signing_algorithm = 'HS256'
+          c.token_signing_private_key = nil
+          c.token_signing_kid = nil
+        end
+      end
+
+      it 'publishes the active public key as a JWK' do
+        get :jwks
+
+        body = JSON.parse(response.body)
+        expect(body['keys'].size).to eq(1)
+
+        jwk = body['keys'].first
+        expect(jwk['kty']).to eq('RSA')
+        expect(jwk['use']).to eq('sig')
+        expect(jwk['alg']).to eq('RS256')
+        expect(jwk['kid']).to be_present
+        expect(jwk['n']).to be_present
+        expect(jwk['e']).to be_present
+        expect(jwk).not_to have_key('d') # never publish private exponent
+      end
+    end
+  end
+
+  describe 'GET #openid_configuration (CP-9255 batch 2)' do
+    it 'advertises the configured signing algorithm' do
+      Mcp::Auth.configure do |c|
+        c.token_signing_algorithm = 'RS256'
+        c.token_signing_private_key = OpenSSL::PKey::RSA.generate(2048).to_pem
+      end
+
+      get :openid_configuration
+      body = JSON.parse(response.body)
+
+      expect(body['id_token_signing_alg_values_supported']).to eq(['RS256'])
+    ensure
+      Mcp::Auth.configure do |c|
+        c.token_signing_algorithm = 'HS256'
+        c.token_signing_private_key = nil
+      end
     end
   end
 
