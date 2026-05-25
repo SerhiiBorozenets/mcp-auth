@@ -22,6 +22,8 @@ module Mcp
     end
 
     class Configuration
+      SUPPORTED_SIGNING_ALGORITHMS = %w[HS256 RS256 ES256].freeze
+
       attr_accessor :oauth_secret,
                     :authorization_server_url,
                     :access_token_lifetime,
@@ -34,7 +36,11 @@ module Mcp
                     :use_custom_consent_view,
                     :mcp_server_path,
                     :mcp_docs_url,
-                    :validate_scope_for_user
+                    :validate_scope_for_user,
+                    :token_signing_algorithm,
+                    :token_signing_private_key,
+                    :token_signing_public_key,
+                    :token_signing_kid
 
       def initialize
         @oauth_secret = nil
@@ -50,6 +56,28 @@ module Mcp
         @mcp_server_path = '/mcp'
         @mcp_docs_url = nil
         @validate_scope_for_user = nil
+        # CP-9255 batch 2: JWT signing.
+        # Default HS256 keeps existing setups working (shared oauth_secret).
+        # Set algorithm to 'RS256' or 'ES256' and provide PEM-encoded keys
+        # via env or config to enable asymmetric signing + JWKS publication.
+        @token_signing_algorithm = 'HS256'
+        @token_signing_private_key = nil
+        @token_signing_public_key = nil
+        @token_signing_kid = nil
+      end
+
+      def token_signing_algorithm=(value)
+        value = value.to_s.upcase
+        unless SUPPORTED_SIGNING_ALGORITHMS.include?(value)
+          raise ArgumentError,
+                "Unsupported token_signing_algorithm: #{value.inspect}. " \
+                "Supported: #{SUPPORTED_SIGNING_ALGORITHMS.join(', ')}"
+        end
+        @token_signing_algorithm = value
+      end
+
+      def asymmetric_signing?
+        token_signing_algorithm != 'HS256'
       end
 
       # Register a custom scope for your application
