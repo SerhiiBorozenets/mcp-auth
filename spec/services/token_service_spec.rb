@@ -47,7 +47,8 @@ RSpec.describe Mcp::Auth::Services::TokenService do
     end
 
     it 'returns nil for expired token' do
-      token_str = described_class.generate_access_token(access_token_params.merge(expires_at: 1.second.ago), base_url: base_url)
+      token_str = described_class.generate_access_token(access_token_params.merge(expires_at: 1.second.ago),
+                                                        base_url: base_url)
       data = described_class.validate_access_token(token_str)
       expect(data).to be_nil
     end
@@ -86,6 +87,59 @@ RSpec.describe Mcp::Auth::Services::TokenService do
     it 'returns nil for invalid refresh token' do
       data = described_class.validate_refresh_token('invalid-token')
       expect(data).to be_nil
+    end
+  end
+
+  describe 'access-token revocation takes effect (RFC 7009)' do
+    it 'rejects a token once its stored row is destroyed' do
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      expect(described_class.validate_access_token(token)).to be_present
+
+      Mcp::Auth::AccessToken.find_by(token: token).destroy
+      expect(described_class.validate_access_token(token)).to be_nil
+    end
+  end
+
+  describe 'RFC 8707 audience binding' do
+    it 'defaults the audience to base_url + configured mcp_server_path' do
+      allow(Mcp::Auth.configuration).to receive(:mcp_server_path).and_return('/api/mcp')
+
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      payload = JWT.decode(token, nil, false).first
+
+      expect(payload['aud']).to eq('http://localhost:3000/api/mcp')
+    end
+
+    it 'matches the audience exactly and is not fooled by a string prefix' do
+      params = access_token_params.merge(resource: 'https://api.example.com')
+      token = described_class.generate_access_token(params, base_url: base_url)
+
+      expect(described_class.validate_access_token(token, resource: 'https://api.example.com')).to be_present
+      expect(described_class.validate_access_token(token, resource: 'https://api.example.com.evil.com')).to be_nil
+    end
+
+    it 'does not crash on a malformed resource indicator' do
+      params = access_token_params.merge(resource: 'not a uri')
+      expect { described_class.generate_access_token(params, base_url: base_url) }.not_to raise_error
+    end
+  end
+
+  describe 'OpenID Connect id_token' do
+    it 'is issued when the openid scope is granted' do
+      response = described_class.generate_token_response(
+        access_token_params.merge(scope: 'openid email mcp:read'),
+        base_url: base_url
+      )
+
+      expect(response[:id_token]).to be_present
+      id_payload = JWT.decode(response[:id_token], nil, false).first
+      expect(id_payload['aud']).to eq(oauth_client.client_id)
+      expect(id_payload['email']).to eq('test@example.com')
+    end
+
+    it 'is omitted when the openid scope is absent' do
+      response = described_class.generate_token_response(access_token_params, base_url: base_url)
+      expect(response).not_to have_key(:id_token)
     end
   end
 end

@@ -6,19 +6,22 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
   subject { build(:oauth_client, client_id: 'test-client', client_secret: 'secret') }
 
   describe 'validations' do
-    it { should validate_uniqueness_of(:client_id) }
+    it { is_expected.to validate_uniqueness_of(:client_id) }
   end
 
   describe 'associations' do
-    it { should have_many(:authorization_codes).dependent(:destroy) }
-    it { should have_many(:access_tokens).dependent(:destroy) }
-    it { should have_many(:refresh_tokens).dependent(:destroy) }
+    it { is_expected.to have_many(:authorization_codes).dependent(:destroy) }
+    it { is_expected.to have_many(:access_tokens).dependent(:destroy) }
+    it { is_expected.to have_many(:refresh_tokens).dependent(:destroy) }
   end
 
   describe 'callbacks' do
     context 'on create' do
       it 'sets default values' do
-        client = described_class.create!(client_name: 'Test Client')
+        client = described_class.create!(
+          client_name: 'Test Client',
+          redirect_uris: ['https://example.com/callback']
+        )
 
         expect(client.client_id).to be_present
         expect(client.client_secret).to be_present
@@ -26,6 +29,29 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
         expect(client.response_types).to eq(['code'])
         expect(client.scope).to eq('mcp:read mcp:write')
       end
+    end
+  end
+
+  describe 'redirect_uri validation (RFC 7591/8252)' do
+    it 'rejects an authorization_code client with no redirect URIs' do
+      client = build(:oauth_client, redirect_uris: [])
+      expect(client).not_to be_valid
+      expect(client.errors[:redirect_uris]).to be_present
+    end
+
+    it 'rejects a javascript: redirect URI' do
+      client = build(:oauth_client, redirect_uris: ['javascript:alert(1)'])
+      expect(client).not_to be_valid
+    end
+
+    it 'accepts an https redirect URI' do
+      client = build(:oauth_client, redirect_uris: ['https://app.example.com/cb'])
+      expect(client).to be_valid
+    end
+
+    it 'accepts a native app-scheme redirect URI' do
+      client = build(:oauth_client, redirect_uris: ['com.example.app://oauth/cb'])
+      expect(client).to be_valid
     end
   end
 

@@ -1,12 +1,14 @@
+# frozen_string_literal: true
+
 module Mcp
   module Auth
     class AccessToken < ActiveRecord::Base
-      self.table_name = "mcp_auth_access_tokens"
+      self.table_name = 'mcp_auth_access_tokens'
 
       belongs_to :user
       belongs_to :org, optional: true
       belongs_to :oauth_client,
-                 class_name: "Mcp::Auth::OauthClient",
+                 class_name: 'Mcp::Auth::OauthClient',
                  foreign_key: :client_id,
                  primary_key: :client_id,
                  optional: true

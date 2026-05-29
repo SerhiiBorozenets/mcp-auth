@@ -51,9 +51,10 @@ module Mcp
           require_pushed_authorization_requests: false,
           require_signed_request_object: false,
 
-          # Token revocation and introspection
-          revocation_endpoint_auth_methods_supported: %w[client_secret_basic client_secret_post none],
-          introspection_endpoint_auth_methods_supported: %w[client_secret_basic client_secret_post none]
+          # Token revocation and introspection require client authentication
+          # (RFC 7009 §2.1 / RFC 7662 §2.1) — `none` is intentionally not offered.
+          revocation_endpoint_auth_methods_supported: %w[client_secret_basic client_secret_post],
+          introspection_endpoint_auth_methods_supported: %w[client_secret_basic client_secret_post]
         }
 
         render json: metadata, status: :ok, content_type: 'application/json'
@@ -88,8 +89,7 @@ module Mcp
       # configured signing algorithm is asymmetric (RS256/ES256). HMAC keys
       # are NEVER published — for HS256 this stays an empty key set.
       def jwks
-        jwk = Mcp::Auth::Services::TokenService.signing_jwk_export
-        keys = jwk ? [jwk] : []
+        keys = Mcp::Auth::Services::TokenService.signing_jwks_export
         render json: { keys: keys }, status: :ok, content_type: 'application/json'
       end
 

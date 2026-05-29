@@ -1,7 +1,11 @@
 class CreateMcpAuthOauthClients < ActiveRecord::Migration<%= migration_version %>
   def up
+    # client_id is a string primary key (the model generates a UUID via
+    # SecureRandom.uuid in a before_validation hook). Using :string instead of
+    # the Postgres-only :uuid / gen_random_uuid() keeps the gem portable across
+    # SQLite, MySQL, and Postgres.
     create_table :mcp_auth_oauth_clients, id: false do |t|
-      t.uuid :client_id, primary_key: true, null: false, default: -> { 'gen_random_uuid()' }
+      t.string :client_id, primary_key: true, null: false
       t.string :client_secret, null: false
       t.text :redirect_uris
       t.text :grant_types
