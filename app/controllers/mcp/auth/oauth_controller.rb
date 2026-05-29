@@ -6,17 +6,17 @@ module Mcp
       skip_before_action :verify_authenticity_token, only: %i[token register revoke introspect userinfo]
       before_action :set_cors_headers
       before_action :handle_options_request
-      before_action :require_https, only: %i[authorize token]
+      before_action :require_https, only: %i[authorize approve token register revoke introspect userinfo]
 
       # OAuth 2.1 Authorization endpoint (GET/POST)
       def authorize
-        Rails.logger.info "[OAuth] Authorization request: #{params.inspect}"
+        Rails.logger.info "[OAuth] Authorization request for client=#{params[:client_id]} scope=#{params[:scope]}"
 
         unless valid_authorization_params?
           return render_error('invalid_request', 'Missing or invalid required parameters')
         end
 
-        if user_signed_in?
+        if mcp_user_signed_in?
           handle_signed_in_user
         else
           redirect_to_login
@@ -25,13 +25,9 @@ module Mcp
 
       # Consent approval endpoint
       def approve
-        unless user_signed_in?
-          return redirect_to main_app.new_user_session_path
-        end
+        return redirect_to main_app.new_user_session_path unless mcp_user_signed_in?
 
-        unless valid_authorization_params?
-          return render_error('invalid_request', 'Missing required parameters')
-        end
+        return render_error('invalid_request', 'Missing required parameters') unless valid_authorization_params?
 
         if params[:approved] == 'true'
           # Get selected scopes from checkboxes
@@ -41,7 +37,7 @@ module Mcp
 
           # Validate selected scopes
           if selected_scopes.blank?
-            Rails.logger.warn "[OAuth] No scopes selected"
+            Rails.logger.warn '[OAuth] No scopes selected'
             return render_error('invalid_request', 'At least one scope must be selected')
           end
 
@@ -58,8 +54,15 @@ module Mcp
             return render_error('invalid_request', 'Required scopes must be selected')
           end
           approved_scopes = Mcp::Auth::ScopeRegistry.validate_scopes(selected_scopes)
+
+          # Preserve standard OpenID Connect scopes that were originally requested.
+          # They gate identity claims (already governed by the userinfo/id_token
+          # endpoints) rather than application resources, so they are not rendered
+          # as individual consent checkboxes but must survive the approval step.
+          oidc_scopes = requested_scopes & Mcp::Auth::ScopeRegistry::STANDARD_OIDC_SCOPES
+          approved_scope_string = (approved_scopes + oidc_scopes).uniq.join(' ')
+
           # Generate authorization code with ONLY approved scopes
-          approved_scope_string = approved_scopes.join(' ')
           generate_and_redirect_with_code(approved_scope_string)
         else
           redirect_with_error('access_denied', 'User denied the request')
@@ -80,7 +83,7 @@ module Mcp
 
       # RFC 7591: Dynamic Client Registration
       def register
-        Rails.logger.info "[OAuth] Client registration request"
+        Rails.logger.info '[OAuth] Client registration request'
 
         begin
           client_data = build_client_registration
@@ -107,9 +110,7 @@ module Mcp
         return render_error('invalid_client', 'Client authentication failed', status: :unauthorized) unless client
 
         token = params[:token]
-        if token.blank?
-          return render_error('invalid_request', 'Token parameter is required')
-        end
+        return render_error('invalid_request', 'Token parameter is required') if token.blank?
 
         revoked = revoke_token_for_client(token, client, hint: params[:token_type_hint])
 
@@ -126,9 +127,7 @@ module Mcp
         return render_error('invalid_client', 'Client authentication failed', status: :unauthorized) unless client
 
         token = params[:token]
-        if token.blank?
-          return render json: { active: false }, content_type: 'application/json'
-        end
+        return render json: { active: false }, content_type: 'application/json' if token.blank?
 
         response = introspect_token_for_client(token, client)
         render json: response, content_type: 'application/json'
@@ -138,16 +137,12 @@ module Mcp
       def userinfo
         auth_header = request.headers['Authorization']
 
-        unless auth_header&.start_with?('Bearer ')
-          return render json: { error: 'invalid_token' }, status: :unauthorized
-        end
+        return render json: { error: 'invalid_token' }, status: :unauthorized unless auth_header&.start_with?('Bearer ')
 
         token = auth_header.split(' ', 2).last
         payload = Services::TokenService.validate_access_token(token)
 
-        unless payload
-          return render json: { error: 'invalid_token' }, status: :unauthorized
-        end
+        return render json: { error: 'invalid_token' }, status: :unauthorized unless payload
 
         user_info = {
           sub: payload[:sub],
@@ -170,7 +165,32 @@ module Mcp
           params[:client_id].present? &&
           params[:redirect_uri].present? &&
           params[:code_challenge].present? &&
-          params[:code_challenge_method] == 'S256'
+          params[:code_challenge_method] == 'S256' &&
+          registered_client_with_valid_redirect?
+      end
+
+      # OAuth 2.1 / RFC 6749 §3.1.2.3: the authorization endpoint MUST reject any
+      # redirect_uri that is not pre-registered for the client. This is the gate
+      # that prevents authorization-code interception via open redirect, so it is
+      # validated BEFORE the code is ever issued — and on failure we render an
+      # error instead of redirecting (we must never redirect to an unverified URI).
+      def registered_client_with_valid_redirect?
+        client = oauth_client
+        unless client
+          Rails.logger.warn "[OAuth] Unknown client_id: #{params[:client_id]}"
+          return false
+        end
+
+        return true if client.valid_redirect_uri?(params[:redirect_uri])
+
+        Rails.logger.warn "[OAuth] Unregistered redirect_uri for client=#{params[:client_id]}: #{params[:redirect_uri]}"
+        false
+      end
+
+      def oauth_client
+        return @oauth_client if defined?(@oauth_client)
+
+        @oauth_client = Mcp::Auth::OauthClient.find_by(client_id: params[:client_id])
       end
 
       # === Authorization Flow ===
@@ -203,13 +223,11 @@ module Mcp
         # Pass the params with approved scope to authorization service
         code = Services::AuthorizationService.generate_authorization_code(
           auth_params,
-          user: current_user,
+          user: mcp_current_user,
           org: current_org
         )
 
-        unless code
-          return render_error('server_error', 'Failed to generate authorization code')
-        end
+        return render_error('server_error', 'Failed to generate authorization code') unless code
 
         redirect_with_code(code)
       end
@@ -240,8 +258,13 @@ module Mcp
       def handle_authorization_code_grant
         code_data = Services::AuthorizationService.validate_authorization_code(params[:code])
 
-        unless code_data
-          return render_error('invalid_grant', 'Authorization code is invalid or expired')
+        return render_error('invalid_grant', 'Authorization code is invalid or expired') unless code_data
+
+        # RFC 6749 §4.1.3: the code MUST be bound to the client it was issued to.
+        # The requesting client identifies itself via HTTP Basic auth (confidential
+        # clients) or the client_id parameter (public clients using PKCE).
+        unless requesting_client_id.present? && requesting_client_id == code_data[:client_id]
+          return render_error('invalid_grant', 'Authorization code was issued to a different client')
         end
 
         # Validate PKCE
@@ -257,28 +280,39 @@ module Mcp
         # Use the APPROVED scope from the authorization code, not the original request
         Rails.logger.info "[OAuth] Token generation using scope from auth code: #{code_data[:scope]}"
 
+        # Consume the authorization code FIRST (one-time use). Doing this before
+        # token generation guarantees a replayed code can never yield a second
+        # set of tokens even if two requests race.
+        Services::AuthorizationService.consume_authorization_code(params[:code])
+
         # Generate tokens with the APPROVED scope from authorization code
         token_data = code_data.merge(resource: code_data[:resource] || params[:resource])
         token_response = Services::TokenService.generate_token_response(
-          token_data,  # This includes the approved :scope from authorization code
+          token_data, # This includes the approved :scope from authorization code
           base_url: request.base_url
         )
 
-        # Consume authorization code (one-time use)
-        Services::AuthorizationService.consume_authorization_code(params[:code])
-
         render json: token_response, content_type: 'application/json'
+      rescue StandardError => e
+        Rails.logger.error "[OAuth] Token generation failed: #{e.message}"
+        render_error('server_error', 'Failed to issue tokens', status: :internal_server_error)
       end
 
       def handle_refresh_token_grant
         token_data = Services::TokenService.validate_refresh_token(params[:refresh_token])
 
-        unless token_data
-          return render_error('invalid_grant', 'Refresh token is invalid or expired')
-        end
+        return render_error('invalid_grant', 'Refresh token is invalid or expired') unless token_data
+
+        # RFC 6749 §6: a client may request a NARROWER scope on refresh, never a
+        # wider one. Silently dropping unknown/extra scopes preserves least privilege.
+        token_data[:scope] = narrow_scope(token_data[:scope], params[:scope]) if params[:scope].present?
 
         # Include resource parameter if provided
         token_data[:resource] = params[:resource] if params[:resource]
+
+        # Rotate refresh token (OAuth 2.1 requirement) BEFORE issuing the new one
+        # so a replayed refresh token cannot mint a second token family.
+        Services::TokenService.revoke_refresh_token(params[:refresh_token])
 
         # Generate new tokens
         token_response = Services::TokenService.generate_token_response(
@@ -286,10 +320,24 @@ module Mcp
           base_url: request.base_url
         )
 
-        # Rotate refresh token (OAuth 2.1 requirement)
-        Services::TokenService.revoke_refresh_token(params[:refresh_token])
-
         render json: token_response, content_type: 'application/json'
+      rescue StandardError => e
+        Rails.logger.error "[OAuth] Token refresh failed: #{e.message}"
+        render_error('server_error', 'Failed to issue tokens', status: :internal_server_error)
+      end
+
+      # Intersection of the originally granted scope and a requested subset.
+      def narrow_scope(granted_scope, requested_scope)
+        granted = granted_scope.to_s.split
+        requested = requested_scope.to_s.split
+        (granted & requested).join(' ')
+      end
+
+      # client_id of the party making a token request: HTTP Basic auth wins for
+      # confidential clients, otherwise the public client_id parameter.
+      def requesting_client_id
+        basic_id, = extract_client_credentials_from_basic
+        basic_id.presence || params[:client_id]
       end
 
       # === Client Registration ===
@@ -342,12 +390,21 @@ module Mcp
       end
 
       def extract_client_credentials
-        if (auth = request.authorization) && auth.start_with?('Basic ')
-          decoded = Base64.decode64(auth.split(' ', 2).last)
-          decoded.split(':', 2)
-        else
-          [params[:client_id], params[:client_secret]]
-        end
+        basic_id, basic_secret = extract_client_credentials_from_basic
+        return [basic_id, basic_secret] if basic_id.present?
+
+        [params[:client_id], params[:client_secret]]
+      end
+
+      # Returns [client_id, client_secret] from an HTTP Basic Authorization
+      # header, or [nil, nil] when the header is absent/not Basic.
+      def extract_client_credentials_from_basic
+        auth = request.authorization
+        return [nil, nil] unless auth&.start_with?('Basic ')
+
+        decoded = Base64.decode64(auth.split(' ', 2).last)
+        id, secret = decoded.split(':', 2)
+        [id, secret]
       end
 
       # RFC 7009: revoke token only if it belongs to the requesting client.
@@ -438,13 +495,13 @@ module Mcp
         config = Rails.application.config.mcp_auth
         config.use_custom_consent_view &&
           template_exists?(config.consent_view_path)
-      rescue
+      rescue StandardError
         false
       end
 
       def template_exists?(path)
         lookup_context.exists?(path, [], false)
-      rescue
+      rescue StandardError
         false
       end
 
@@ -465,7 +522,7 @@ module Mcp
         if Mcp::Auth.configuration.validate_scope_for_user
           all_available = all_available.select do |scope|
             Mcp::Auth.configuration.validate_scope_for_user.call(
-              current_user,
+              mcp_current_user,
               current_org,
               scope
             )
@@ -507,7 +564,7 @@ module Mcp
       end
 
       def require_https
-        return if request.ssl? || request.local? || Rails.env.development?
+        return if request.ssl? || request.local? || Rails.env.local?
 
         render_error('invalid_request', 'HTTPS required')
       end
@@ -527,6 +584,22 @@ module Mcp
 
         Rails.logger.error "[OAuth] Error: #{error_response.inspect}"
         render json: error_response, status: status, content_type: 'application/json'
+      end
+
+      # Resolve the signed-in user via the configured `current_user_method`
+      # (defaults to :current_user). Accepts either a symbol naming a method on
+      # the host ApplicationController or a proc evaluated in this context.
+      def mcp_current_user
+        method_name = Mcp::Auth.configuration&.current_user_method || :current_user
+        return instance_exec(&method_name) if method_name.respond_to?(:call)
+
+        send(method_name) if respond_to?(method_name, true)
+      rescue NoMethodError
+        nil
+      end
+
+      def mcp_user_signed_in?
+        mcp_current_user.present?
       end
 
       def current_org

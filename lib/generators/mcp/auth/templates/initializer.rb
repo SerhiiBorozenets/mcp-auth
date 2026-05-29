@@ -193,6 +193,38 @@ Mcp::Auth.configure do |config|
   #    - @authorization_params: Hash of OAuth parameters to preserve
 end
 
+  # ============================================================================
+  # JWT SIGNING (OPTIONAL)
+  # ============================================================================
+  #
+  # By default tokens are signed with HS256 using `oauth_secret`. To use
+  # asymmetric signing (recommended when token consumers should verify without
+  # the shared secret), set an algorithm and provide PEM-encoded keys:
+  #
+  # config.token_signing_algorithm = 'RS256' # or 'ES256'
+  # config.token_signing_private_key = ENV.fetch('MCP_JWT_PRIVATE_KEY')
+  # config.token_signing_public_key  = ENV['MCP_JWT_PUBLIC_KEY'] # optional; derived if omitted
+  # config.token_signing_kid         = 'main-2026' # optional explicit JWK key id
+  #
+  # Key rotation: list the previous public key(s) here so already-issued tokens
+  # keep verifying and both keys are published at /.well-known/jwks.json:
+  # config.token_signing_additional_public_keys = [ENV['MCP_JWT_PREVIOUS_PUBLIC_KEY']]
+
+# ============================================================================
+# PROTECTING YOUR MCP ENDPOINT (RESOURCE SERVER)
+# ============================================================================
+#
+# Include the resource-server concern in the controller that serves your MCP
+# endpoint. It validates the Bearer access token, exposes the principal via
+# mcp_user_id / mcp_scope / mcp_email, and returns a spec-compliant 401 with a
+# WWW-Authenticate header pointing at the protected-resource metadata.
+#
+#   class McpController < ApplicationController
+#     include Mcp::Auth::ProtectedResource
+#     before_action :authenticate_mcp_token!
+#     before_action -> { require_mcp_scope!('mcp:read') }, only: :show
+#   end
+
 # Include controller helpers in ApplicationController
 Rails.application.config.to_prepare do
   ApplicationController.include Mcp::Auth::ControllerHelpers

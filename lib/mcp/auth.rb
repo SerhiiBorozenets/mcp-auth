@@ -37,10 +37,14 @@ module Mcp
                     :mcp_server_path,
                     :mcp_docs_url,
                     :validate_scope_for_user,
-                    :token_signing_algorithm,
                     :token_signing_private_key,
                     :token_signing_public_key,
+                    :token_signing_additional_public_keys,
                     :token_signing_kid
+
+      # token_signing_algorithm has a validating writer defined below, so only
+      # the reader is generated here.
+      attr_reader :token_signing_algorithm
 
       def initialize
         @oauth_secret = nil
@@ -63,6 +67,9 @@ module Mcp
         @token_signing_algorithm = 'HS256'
         @token_signing_private_key = nil
         @token_signing_public_key = nil
+        # Additional public keys (PEM strings or OpenSSL::PKey instances) accepted
+        # for verification and published in the JWKS during key rotation.
+        @token_signing_additional_public_keys = []
         @token_signing_kid = nil
       end
 
@@ -132,6 +139,8 @@ module Mcp
   end
 end
 
+# Loaded after the module body so they can reference Mcp::Auth::Configuration
+# and Mcp::Auth::ControllerHelpers defined above. The services are already
+# required at the top of this file.
 require 'mcp/auth/scope_registry'
-require 'mcp/auth/services/token_service'
-require 'mcp/auth/services/authorization_service'
+require 'mcp/auth/protected_resource'

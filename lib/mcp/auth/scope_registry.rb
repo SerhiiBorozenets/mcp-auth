@@ -14,6 +14,11 @@ module Mcp
     #     required: false
     #   )
     class ScopeRegistry
+      # Standard OpenID Connect scopes. These are not application resource scopes
+      # (so they are not registered or shown as consent checkboxes) but are
+      # recognized when present so OIDC discovery/id_token issuance works.
+      STANDARD_OIDC_SCOPES = %w[openid profile email].freeze
+
       class << self
         # Custom scopes registered by the application
         def custom_scopes
@@ -72,9 +77,7 @@ module Mcp
         # Validate and filter requested scopes
         def validate_scopes(requested_scopes)
           # If no scopes requested, return all required scopes
-          if requested_scopes.blank?
-            return available_scopes.select { |_, meta| meta[:required] }.keys
-          end
+          return available_scopes.select { |_, meta| meta[:required] }.keys if requested_scopes.blank?
 
           scopes = requested_scopes.is_a?(String) ? requested_scopes.split : requested_scopes
 

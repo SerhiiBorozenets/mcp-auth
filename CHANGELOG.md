@@ -7,6 +7,73 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.4.0] - 2026-05-29
+
+Security-hardening release. Closes four OAuth correctness bugs and adds the
+resource-server half of the MCP authorization spec.
+
+### Security (breaking where noted)
+- **Authorization endpoint now validates `redirect_uri`** against the client's
+  registered URIs (RFC 6749 §3.1.2.3) and rejects unknown `client_id`s. An
+  unregistered/mismatched `redirect_uri` is answered with an error and is never
+  redirected to. **Breaking:** flows that relied on unvalidated redirect URIs
+  will now be rejected — register every redirect URI.
+- **Access-token revocation now takes effect.** `validate_access_token` checks
+  that the stored token row still exists, so `POST /oauth/revoke` and an
+  expired/destroyed row immediately invalidate the JWT instead of it remaining
+  valid until natural expiry. Introspection reflects this too.
+- **Token endpoint binds the authorization code to the client** (RFC 6749
+  §4.1.3): the requesting `client_id` (Basic auth or body) must match the code.
+- **Audience binding honors `mcp_server_path`.** The default token `aud` is now
+  `base_url + mcp_server_path`, matching the published protected-resource
+  metadata (previously hard-coded to `/mcp`, breaking RFC 8707 on custom paths).
+- **Audience matching is exact**, no longer a string prefix (which let
+  `https://api.example.com.evil.com` match `https://api.example.com`).
+- HTTPS is now enforced on `register`, `revoke`, `introspect`, and `userinfo`
+  (in addition to `authorize`/`token`), except in dev/test/local.
+
+### Added
+- **`Mcp::Auth::ProtectedResource`** controller concern — validates the incoming
+  Bearer token on your MCP endpoint, exposes the principal via
+  `Mcp::Auth::ControllerHelpers` (`mcp_user_id`, `mcp_scope`, …), and answers
+  401 with the RFC 9728 `WWW-Authenticate: Bearer … resource_metadata="…"`
+  header the MCP spec requires. Includes `require_mcp_scope!` for per-action
+  scope enforcement.
+- **OpenID Connect id_token issuance** — when the `openid` scope is granted, the
+  token response includes an `id_token` (with `email`/`profile` claims gated by
+  scope), making the advertised OIDC discovery real.
+- **Signing-key rotation** — `token_signing_additional_public_keys` accepts extra
+  public keys that are honored for verification and published in JWKS, so a key
+  roll doesn't invalidate outstanding tokens. `TokenService.reset_signing_keys!`
+  clears the in-process key cache.
+- Refresh grant supports **scope narrowing** (RFC 6749 §6) and the wired-up
+  `current_user_method` config option.
+- Dynamic client registration now validates redirect URIs (RFC 7591/8252),
+  rejecting empty sets and dangerous schemes (`javascript:`/`data:`).
+
+### Changed
+- Refresh-token rotation and authorization-code consumption now happen *before*
+  new tokens are minted, so a replayed code/refresh token can't double-issue.
+- `store_access_token` failures now propagate instead of silently handing the
+  client an unrevocable token.
+- `none` removed from advertised revocation/introspection auth methods (those
+  endpoints require client authentication).
+- Migration template for `mcp_auth_oauth_clients` uses a portable `string`
+  primary key instead of Postgres-only `uuid`/`gen_random_uuid()`.
+
+### Migration
+
+Mostly drop-in. Two things to check:
+1. Ensure all OAuth clients have their `redirect_uris` registered — the
+   authorization endpoint now enforces them.
+2. To protect your MCP endpoint, include the new concern:
+   ```ruby
+   class McpController < ApplicationController
+     include Mcp::Auth::ProtectedResource
+     before_action :authenticate_mcp_token!
+   end
+   ```
+
 ## [0.3.0] - 2026-05-25
 
 ### Added
