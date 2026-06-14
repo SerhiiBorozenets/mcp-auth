@@ -50,7 +50,12 @@ Mcp::Auth.configure do |config|
   # Expected return value: Hash with keys:
   #   - :email (String) - User's email address
   #   - :api_key_id (String/Integer, optional) - API key ID if using API keys
-  #   - :api_key_secret (String, optional) - API key secret if using API keys
+  #
+  # SECURITY: the access token is a bearer JWT — anyone holding it can decode
+  # its claims, and a copy is stored at rest for revocation. Only embed
+  # non-sensitive values. Return an api_key_id (an opaque reference) and look up
+  # the matching secret server-side at request time. A raw `api_key_secret`
+  # returned here is intentionally IGNORED and never written into the token.
   config.fetch_user_data = proc do |data|
     user = User.find(data[:user_id])
 
@@ -60,11 +65,10 @@ Mcp::Auth.configure do |config|
 
     {
       email: user.email,
-      api_key_id: nil,      # Set to your API key ID if applicable
-      api_key_secret: nil   # Set to your API key secret if applicable
+      api_key_id: nil      # Set to your API key ID if applicable
     }
   rescue ActiveRecord::RecordNotFound
-    { email: 'unknown@example.com', api_key_id: nil, api_key_secret: nil }
+    { email: 'unknown@example.com', api_key_id: nil }
   end
 
   # ============================================================================

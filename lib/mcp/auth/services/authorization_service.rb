@@ -52,7 +52,14 @@ module Mcp
             }
           end
 
-          # Consume authorization code (one-time use)
+          # Consume authorization code (one-time use).
+          #
+          # OAuth 2.1 §4.1.2: an authorization code MUST be single-use. The
+          # delete is done as a single atomic DELETE ... WHERE that reports how
+          # many rows it removed, so when two requests race to redeem the same
+          # code exactly ONE sees `deleted == 1` and proceeds; the loser sees 0
+          # and gets nil. Returns the code's data on success, nil if the code was
+          # already consumed (or never existed).
           def consume_authorization_code(code)
             authorization_code = Mcp::Auth::AuthorizationCode.find_by(code: code)
             return nil unless authorization_code
@@ -69,8 +76,10 @@ module Mcp
               created_at: authorization_code.created_at.to_i
             }
 
-            authorization_code.destroy
-            Rails.logger.info "[AuthorizationService] Authorization code consumed"
+            deleted = Mcp::Auth::AuthorizationCode.where(id: authorization_code.id).delete_all
+            return nil unless deleted == 1
+
+            Rails.logger.info '[AuthorizationService] Authorization code consumed'
             code_data
           end
 

@@ -36,6 +36,20 @@ RSpec.describe Mcp::Auth::Services::TokenService do
     end
   end
 
+  describe '.generate_access_token sensitive-claim hygiene' do
+    it 'embeds the api_key_id but never the api_key_secret' do
+      allow(Mcp::Auth.configuration).to receive(:fetch_user_data).and_return(
+        proc { |_data| { email: 't@example.com', api_key_id: 'key-123', api_key_secret: 'SUPER-SECRET' } }
+      )
+
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      payload = JWT.decode(token, nil, false).first
+
+      expect(payload['api_key_id']).to eq('key-123')
+      expect(payload).not_to have_key('api_key_secret')
+    end
+  end
+
   describe '.validate_access_token' do
     it 'returns token data for valid token' do
       token_str = described_class.generate_access_token(access_token_params, base_url: base_url)

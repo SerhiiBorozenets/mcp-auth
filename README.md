@@ -186,18 +186,22 @@ Mcp::Auth.configure do |config|
   config.authorization_code_lifetime = 1800  # 30 minutes
 
   # User data fetcher - CUSTOMIZE THIS
+  #
+  # SECURITY: only NON-sensitive values are embedded into the access token (a
+  # bearer JWT is decodable by anyone holding it and is stored at rest). Return
+  # an api_key_id (an opaque reference) and resolve the matching secret
+  # server-side from that id at request time. Never return a raw secret here —
+  # any `api_key_secret` is intentionally ignored and NOT placed in the token.
   config.fetch_user_data = proc do |data|
     user = User.find(data[:user_id])
     org = Org.find(data[:org_id]) if data[:org_id]
-    
-    # Return user data + API key (if you have one)
+
     {
       email: user.email,
-      api_key_id: org&.api_key&.id,
-      api_key_secret: org&.api_key&.secret
+      api_key_id: org&.api_key&.id
     }
   rescue ActiveRecord::RecordNotFound
-    { email: 'unknown@example.com', api_key_id: nil, api_key_secret: nil }
+    { email: 'unknown@example.com', api_key_id: nil }
   end
 
   # Methods for authentication

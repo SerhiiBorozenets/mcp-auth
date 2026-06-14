@@ -162,15 +162,36 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(response).to have_http_status(:bad_request)
     end
 
-    it 'issues a code to a registered redirect_uri when approved and signed in' do
+    it 'never auto-issues a code from GET /authorize, even with approved=true (no consent bypass)' do
       allow(controller).to receive(:mcp_current_user).and_return(user)
 
       get :authorize, params: base_params.merge(approved: 'true')
+
+      # The consent screen is rendered; a code is issued only via POST /approve.
+      expect(response).to have_http_status(:ok)
+      expect(response).not_to have_http_status(:redirect)
+      expect(Mcp::Auth::AuthorizationCode.count).to eq(0)
+    end
+
+    it 'issues a code via the CSRF-protected POST /oauth/approve when the user approves' do
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      post :approve, params: base_params.merge(approved: 'true', scopes: ['mcp:read'])
 
       expect(response).to have_http_status(:redirect)
       expect(response.location).to start_with('http://localhost:3000/callback?')
       expect(response.location).to include('code=')
       expect(response.location).to include('iss=')
+    end
+
+    it 'rejects a resource indicator that does not identify this server (RFC 8707)' do
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      get :authorize, params: base_params.merge(resource: 'https://evil.example.com/mcp')
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_request')
+      expect(Mcp::Auth::AuthorizationCode.count).to eq(0)
     end
   end
 
@@ -221,22 +242,81 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
       expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
     end
+
+    it 'rejects re-use of an authorization code (single-use, OAuth 2.1 §4.1.2)' do
+      issued = code
+      post :token, params: {
+        grant_type: 'authorization_code', code: issued, code_verifier: verifier,
+        redirect_uri: redirect_uri, client_id: client.client_id
+      }
+      expect(response).to have_http_status(:ok)
+
+      post :token, params: {
+        grant_type: 'authorization_code', code: issued, code_verifier: verifier,
+        redirect_uri: redirect_uri, client_id: client.client_id
+      }
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+    end
+
+    it 'issues no tokens when a racing request already consumed the code' do
+      # Simulate losing the atomic consume race: the row was deleted by the
+      # other request between our validate and our consume.
+      allow(Mcp::Auth::Services::AuthorizationService)
+        .to receive(:consume_authorization_code).and_return(nil)
+
+      expect do
+        post :token, params: {
+          grant_type: 'authorization_code', code: code, code_verifier: verifier,
+          redirect_uri: redirect_uri, client_id: client.client_id
+        }
+      end.not_to change(Mcp::Auth::AccessToken, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+    end
   end
 
   describe 'POST #token refresh_token grant' do
     let!(:refresh) { create(:refresh_token, oauth_client: client, scope: 'mcp:read mcp:write') }
 
     it 'narrows scope when a subset is requested (RFC 6749 §6)' do
-      post :token, params: { grant_type: 'refresh_token', refresh_token: refresh.token, scope: 'mcp:read' }
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.token,
+        scope: 'mcp:read', client_id: client.client_id
+      }
 
       expect(response).to have_http_status(:ok)
       expect(JSON.parse(response.body)['scope']).to eq('mcp:read')
     end
 
     it 'rotates the refresh token' do
-      post :token, params: { grant_type: 'refresh_token', refresh_token: refresh.token }
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.token, client_id: client.client_id
+      }
 
       expect(Mcp::Auth::RefreshToken.find_by(id: refresh.id)).to be_nil
+    end
+
+    it 'rejects redemption by a client other than the one it was issued to (OAuth 2.1 §4.3.1)' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.token, client_id: other_client.client_id
+      }
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+      # The token is not rotated/consumed on a failed binding check.
+      expect(Mcp::Auth::RefreshToken.find_by(id: refresh.id)).to be_present
+    end
+
+    it 'rejects a resource indicator that does not identify this server (RFC 8707)' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.token,
+        client_id: client.client_id, resource: 'https://evil.example.com/mcp'
+      }
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_target')
     end
   end
 end

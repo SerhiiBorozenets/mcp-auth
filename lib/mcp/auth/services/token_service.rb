@@ -76,8 +76,11 @@ module Mcp
               client_id: data[:client_id],
               email: user_data[:email],
               scope: data[:scope],
+              # Only a non-sensitive API key *identifier* is embedded. A bearer
+              # JWT is decodable by anyone holding it (and is stored at rest), so
+              # the matching secret MUST NOT be placed in the token — the resource
+              # server resolves the secret server-side from this id when needed.
               api_key_id: user_data[:api_key_id],
-              api_key_secret: user_data[:api_key_secret],
               iat: Time.current.to_i,
               exp: exp_time
             }
@@ -258,6 +261,19 @@ module Mcp
             @cached_private_key = nil
             @cached_public_key = nil
             @jwk = nil
+          end
+
+          # RFC 8707 §2 / MCP authorization spec: an authorization server MUST
+          # only honor resource indicators that name a resource it actually
+          # serves. A blank resource defaults to the canonical resource, so it is
+          # allowed; otherwise the request is accepted only when the requested
+          # resource matches this server's canonical resource (normalized, never
+          # a substring match). This stops a malicious client from minting tokens
+          # whose `aud` is some other — possibly attacker-controlled — resource.
+          def resource_allowed?(resource, canonical_resource)
+            return true if resource.blank?
+
+            audience_matches?(canonical_resource, resource)
           end
 
           private

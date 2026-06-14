@@ -166,7 +166,29 @@ module Mcp
           params[:redirect_uri].present? &&
           params[:code_challenge].present? &&
           params[:code_challenge_method] == 'S256' &&
+          valid_requested_resource? &&
           registered_client_with_valid_redirect?
+      end
+
+      # RFC 8707 / MCP authorization spec: if the client sends a `resource`, it
+      # MUST identify this server. A token whose audience is some other resource
+      # must never be minted, so the request is rejected here — before any code
+      # is issued — rather than silently binding the token to a foreign audience.
+      def valid_requested_resource?
+        return true if params[:resource].blank?
+
+        allowed = Services::TokenService.resource_allowed?(params[:resource], canonical_resource_identifier)
+        Rails.logger.warn "[OAuth] Rejected unknown resource indicator: #{params[:resource]}" unless allowed
+        allowed
+      end
+
+      # Canonical resource identifier this server issues/accepts tokens for
+      # (base_url + configured mcp_server_path). Mirrors the value published in
+      # the protected-resource metadata and minted into the token `aud`.
+      def canonical_resource_identifier
+        path = Mcp::Auth.configuration&.mcp_server_path.presence || '/mcp'
+        path = "/#{path}" unless path.start_with?('/')
+        "#{request.base_url}#{path.chomp('/')}"
       end
 
       # OAuth 2.1 / RFC 6749 §3.1.2.3: the authorization endpoint MUST reject any
@@ -195,12 +217,13 @@ module Mcp
 
       # === Authorization Flow ===
 
+      # The authorization endpoint (GET/POST /oauth/authorize) MUST NOT issue a
+      # code on its own: doing so let any client skip consent by appending
+      # `approved=true` to the authorization URL (a GET, so not even CSRF
+      # protected). Approval is an explicit, CSRF-protected POST to
+      # /oauth/approve — so here we only ever render the consent screen.
       def handle_signed_in_user
-        if params[:approved] == 'true'
-          generate_and_redirect_with_code
-        else
-          show_consent_screen
-        end
+        show_consent_screen
       end
 
       def redirect_to_login
@@ -263,9 +286,13 @@ module Mcp
         # RFC 6749 §4.1.3: the code MUST be bound to the client it was issued to.
         # The requesting client identifies itself via HTTP Basic auth (confidential
         # clients) or the client_id parameter (public clients using PKCE).
-        unless requesting_client_id.present? && requesting_client_id == code_data[:client_id]
+        unless requesting_client_owns?(code_data[:client_id])
           return render_error('invalid_grant', 'Authorization code was issued to a different client')
         end
+
+        # RFC 8707: a `resource` sent at the token endpoint (used as the audience
+        # fallback when the code carried none) must still identify this server.
+        return render_error('invalid_target', 'Invalid resource indicator') unless valid_requested_resource?
 
         # Validate PKCE
         unless Services::AuthorizationService.validate_pkce?(code_data[:code_challenge], params[:code_verifier])
@@ -280,10 +307,13 @@ module Mcp
         # Use the APPROVED scope from the authorization code, not the original request
         Rails.logger.info "[OAuth] Token generation using scope from auth code: #{code_data[:scope]}"
 
-        # Consume the authorization code FIRST (one-time use). Doing this before
-        # token generation guarantees a replayed code can never yield a second
-        # set of tokens even if two requests race.
-        Services::AuthorizationService.consume_authorization_code(params[:code])
+        # Consume the authorization code FIRST (one-time use). consume_* deletes
+        # the row atomically and only the request that actually removed it gets a
+        # truthy result, so a replayed/raced code can never yield a second set of
+        # tokens. Abort if we did not win the consumption.
+        unless Services::AuthorizationService.consume_authorization_code(params[:code])
+          return render_error('invalid_grant', 'Authorization code is invalid or expired')
+        end
 
         # Generate tokens with the APPROVED scope from authorization code
         token_data = code_data.merge(resource: code_data[:resource] || params[:resource])
@@ -302,6 +332,17 @@ module Mcp
         token_data = Services::TokenService.validate_refresh_token(params[:refresh_token])
 
         return render_error('invalid_grant', 'Refresh token is invalid or expired') unless token_data
+
+        # OAuth 2.1 §4.3.1 / RFC 6749 §6: the authorization server MUST bind the
+        # refresh token to the client it was issued to and reject redemption by
+        # any other client. Without this a refresh token leaked to (or through) a
+        # second client could be exchanged for fresh access tokens.
+        unless requesting_client_owns?(token_data[:client_id])
+          return render_error('invalid_grant', 'Refresh token was issued to a different client')
+        end
+
+        # RFC 8707: a resource indicator, when supplied, must name this server.
+        return render_error('invalid_target', 'Invalid resource indicator') unless valid_requested_resource?
 
         # RFC 6749 §6: a client may request a NARROWER scope on refresh, never a
         # wider one. Silently dropping unknown/extra scopes preserves least privilege.
@@ -338,6 +379,12 @@ module Mcp
       def requesting_client_id
         basic_id, = extract_client_credentials_from_basic
         basic_id.presence || params[:client_id]
+      end
+
+      # True only when the token-requesting client identifies itself AND that
+      # identity matches the client a grant (code/refresh token) was issued to.
+      def requesting_client_owns?(client_id)
+        requesting_client_id.present? && requesting_client_id == client_id
       end
 
       # === Client Registration ===
