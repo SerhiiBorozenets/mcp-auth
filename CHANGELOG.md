@@ -7,6 +7,44 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.5.0] - 2026-06-15
+
+Security-hardening release. Closes five OAuth 2.1 / MCP authorization
+vulnerabilities found in an adversarial audit of the authorization server and
+protected-resource layer. Each fix ships with an RSpec test that fails before
+and passes after.
+
+### Security (breaking where noted)
+- **Consent can no longer be bypassed.** `GET /oauth/authorize` previously issued
+  an authorization code immediately when `approved=true` was present on the
+  request URL — a GET, so not even CSRF-protected — skipping the consent screen
+  entirely. The authorization endpoint now always renders consent; a code is
+  granted only via the CSRF-protected `POST /oauth/approve`. **Breaking:** clients
+  that appended `approved=true` to the authorize URL to auto-approve must go
+  through the consent/approve step.
+- **Refresh tokens are bound to the issuing client** (OAuth 2.1 §4.3.1). The
+  refresh grant now rejects redemption unless the requesting `client_id` (Basic
+  auth or body) matches the client the token was issued to, and does not rotate
+  the token on a failed check. **Breaking:** a refresh request must include the
+  matching `client_id` — the documented flow already does.
+- **Authorization codes are consumed atomically** (OAuth 2.1 §4.1.2). Consumption
+  now deletes the code in a single atomic operation and the token grant aborts
+  unless it won that deletion, eliminating a race that could mint two token sets
+  from one code.
+- **Resource indicators are validated** (RFC 8707 / MCP authorization spec).
+  `authorize` and both token grants reject any `resource` that does not identify
+  this server (`invalid_target`), so the server can no longer mint a token whose
+  audience is some other — possibly attacker-controlled — resource. **Breaking:**
+  requests carrying a `resource` for a different host/path are rejected.
+- **`api_key_secret` is no longer embedded in access tokens.** A bearer JWT is
+  decodable by anyone holding it and is stored at rest, so only the non-sensitive
+  `api_key_id` is now included; resolve the matching secret server-side from that
+  id. Any `api_key_secret` returned by `fetch_user_data` is ignored.
+
+### Changed
+- README and the generated initializer document that `fetch_user_data` must not
+  return secrets (they are ignored and never written into the token).
+
 ## [0.4.0] - 2026-05-29
 
 Security-hardening release. Closes four OAuth correctness bugs and adds the
@@ -177,7 +215,9 @@ keep `HS256` until refresh tokens cycle out.
 - Token audience validation to prevent confused deputy attacks
 - WWW-Authenticate header with resource metadata on 401 responses
 
-[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.4.0...v0.5.0
+[0.4.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.2.0...v0.3.0
 [0.2.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.1.0...v0.2.0
 [0.1.0]: https://github.com/SerhiiBorozenets/mcp-auth/releases/tag/v0.1.0
