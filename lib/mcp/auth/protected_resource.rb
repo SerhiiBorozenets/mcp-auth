@@ -66,12 +66,15 @@ module Mcp
         header.split(' ', 2).last.presence
       end
 
-      # Canonical resource identifier for this server (base_url + mcp_server_path),
-      # matching the audience minted into access tokens.
+      # Canonical resource identifier for this server (server origin +
+      # mcp_server_path), matching the audience minted into access tokens. Prefer
+      # the configured authorization_server_url so the audience check is pinned to
+      # a trusted origin rather than a (possibly forged) request Host.
       def mcp_resource_identifier
+        origin = Mcp::Auth.configuration&.authorization_server_url.presence || request.base_url
         path = Mcp::Auth.configuration&.mcp_server_path.presence || '/mcp'
         path = "/#{path}" unless path.start_with?('/')
-        "#{request.base_url}#{path.chomp('/')}"
+        "#{origin}#{path.chomp('/')}"
       end
 
       # RFC 9728 §5.1 / MCP authorization spec: a 401 MUST advertise the

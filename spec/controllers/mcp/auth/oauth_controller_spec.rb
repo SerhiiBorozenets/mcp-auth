@@ -193,6 +193,17 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(JSON.parse(response.body)['error']).to eq('invalid_request')
       expect(Mcp::Auth::AuthorizationCode.count).to eq(0)
     end
+
+    it 'does not grant scopes the client never requested (M2, least privilege)' do
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      post :approve, params: base_params.merge(
+        approved: 'true', scope: 'mcp:read', scopes: %w[mcp:read mcp:write]
+      )
+
+      expect(response).to have_http_status(:redirect)
+      expect(Mcp::Auth::AuthorizationCode.last.scope.split).to contain_exactly('mcp:read')
+    end
   end
 
   describe 'POST #token authorization_code grant' do
@@ -317,6 +328,39 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
       expect(response).to have_http_status(:bad_request)
       expect(JSON.parse(response.body)['error']).to eq('invalid_target')
+    end
+
+    it 'rejects a presented but invalid client_secret (H1)' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.token,
+        client_id: client.client_id, client_secret: 'wrong-secret'
+      }
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_client')
+      expect(Mcp::Auth::RefreshToken.find_by(id: refresh.id)).to be_present # not rotated
+    end
+
+    it 'accepts a presented valid client_secret' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.token,
+        client_id: client.client_id, client_secret: client.client_secret
+      }
+
+      expect(response).to have_http_status(:ok)
+    end
+
+    it 'issues no tokens when a racing request already rotated the token (M1)' do
+      allow(Mcp::Auth::Services::TokenService).to receive(:revoke_refresh_token).and_return(false)
+
+      expect do
+        post :token, params: {
+          grant_type: 'refresh_token', refresh_token: refresh.token, client_id: client.client_id
+        }
+      end.not_to change(Mcp::Auth::AccessToken, :count)
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
     end
   end
 end

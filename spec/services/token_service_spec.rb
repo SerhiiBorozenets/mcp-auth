@@ -138,6 +138,61 @@ RSpec.describe Mcp::Auth::Services::TokenService do
     end
   end
 
+  describe 'oauth_secret key separation (M7)' do
+    it 'refuses to fall back to secret_key_base in production when unset' do
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new('production'))
+      allow(Mcp::Auth.configuration).to receive(:oauth_secret).and_return(nil)
+
+      expect { described_class.send(:oauth_secret) }
+        .to raise_error(Mcp::Auth::Error, /oauth_secret/)
+    end
+
+    it 'uses the configured secret when present (no error)' do
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new('production'))
+      allow(Mcp::Auth.configuration).to receive(:oauth_secret).and_return('dedicated-secret')
+
+      expect(described_class.send(:oauth_secret)).to eq('dedicated-secret')
+    end
+  end
+
+  describe 'JWT validation hardening (H3)' do
+    def sign(payload)
+      JWT.encode(payload, 'test_secret', 'HS256')
+    end
+
+    def store_row(token)
+      Mcp::Auth::AccessToken.create!(
+        token: token, client_id: oauth_client.client_id, resource: "#{base_url}/mcp",
+        scope: 'mcp:read', user_id: user.id, expires_at: 1.hour.from_now
+      )
+    end
+
+    let(:now) { Time.current.to_i }
+
+    it 'rejects an id_token presented as an access token, even when a stored row exists' do
+      forged = sign(iss: base_url, aud: oauth_client.client_id, sub: user.id.to_s,
+                    token_use: 'id', iat: now, exp: now + 3600)
+      store_row(forged) # bypass the revocation/DB gate to isolate the token_use check
+
+      expect(described_class.validate_access_token(forged)).to be_nil
+    end
+
+    it 'rejects a token missing the required aud claim' do
+      forged = sign(iss: base_url, sub: user.id.to_s, token_use: 'access', iat: now, exp: now + 3600)
+      store_row(forged)
+
+      expect(described_class.validate_access_token(forged)).to be_nil
+    end
+
+    it 'still accepts a well-formed access token carrying token_use=access' do
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      payload = JWT.decode(token, nil, false).first
+
+      expect(payload['token_use']).to eq('access')
+      expect(described_class.validate_access_token(token)).to be_present
+    end
+  end
+
   describe 'OpenID Connect id_token' do
     it 'is issued when the openid scope is granted' do
       response = described_class.generate_token_response(

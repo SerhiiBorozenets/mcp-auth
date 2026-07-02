@@ -55,6 +55,13 @@ module Mcp
           end
           approved_scopes = Mcp::Auth::ScopeRegistry.validate_scopes(selected_scopes)
 
+          # Least privilege: a client must never RECEIVE a scope it did not
+          # REQUEST. `validate_scopes` re-adds all registered "required" scopes and
+          # the consent screen can surface scopes beyond the request, so intersect
+          # the result with the originally-requested set before issuing the code.
+          # (When the client requested nothing, fall back to the validated set.)
+          approved_scopes &= requested_scopes if requested_scopes.any?
+
           # Preserve standard OpenID Connect scopes that were originally requested.
           # They gate identity claims (already governed by the userinfo/id_token
           # endpoints) rather than application resources, so they are not rendered
@@ -183,12 +190,12 @@ module Mcp
       end
 
       # Canonical resource identifier this server issues/accepts tokens for
-      # (base_url + configured mcp_server_path). Mirrors the value published in
-      # the protected-resource metadata and minted into the token `aud`.
+      # (server origin + configured mcp_server_path). Mirrors the value published
+      # in the protected-resource metadata and minted into the token `aud`.
       def canonical_resource_identifier
         path = Mcp::Auth.configuration&.mcp_server_path.presence || '/mcp'
         path = "/#{path}" unless path.start_with?('/')
-        "#{request.base_url}#{path.chomp('/')}"
+        "#{server_origin}#{path.chomp('/')}"
       end
 
       # OAuth 2.1 / RFC 6749 §3.1.2.3: the authorization endpoint MUST reject any
@@ -290,6 +297,11 @@ module Mcp
           return render_error('invalid_grant', 'Authorization code was issued to a different client')
         end
 
+        # If the client presents a secret it MUST be valid (see helper).
+        unless client_secret_valid_if_presented?(code_data[:client_id])
+          return render_error('invalid_client', 'Client authentication failed', status: :unauthorized)
+        end
+
         # RFC 8707: a `resource` sent at the token endpoint (used as the audience
         # fallback when the code carried none) must still identify this server.
         return render_error('invalid_target', 'Invalid resource indicator') unless valid_requested_resource?
@@ -304,23 +316,23 @@ module Mcp
           return render_error('invalid_grant', 'Redirect URI mismatch')
         end
 
-        # Use the APPROVED scope from the authorization code, not the original request
+        consume_code_and_issue_tokens(code_data)
+      end
+
+      # Consume the authorization code (one-time use) and mint the token response.
+      # consume_* deletes the row atomically and only the request that actually
+      # removed it gets a truthy result, so a replayed/raced code can never yield a
+      # second set of tokens — abort if we did not win the consumption. The tokens
+      # carry the APPROVED scope stored on the code, not the original request.
+      def consume_code_and_issue_tokens(code_data)
         Rails.logger.info "[OAuth] Token generation using scope from auth code: #{code_data[:scope]}"
 
-        # Consume the authorization code FIRST (one-time use). consume_* deletes
-        # the row atomically and only the request that actually removed it gets a
-        # truthy result, so a replayed/raced code can never yield a second set of
-        # tokens. Abort if we did not win the consumption.
         unless Services::AuthorizationService.consume_authorization_code(params[:code])
           return render_error('invalid_grant', 'Authorization code is invalid or expired')
         end
 
-        # Generate tokens with the APPROVED scope from authorization code
         token_data = code_data.merge(resource: code_data[:resource] || params[:resource])
-        token_response = Services::TokenService.generate_token_response(
-          token_data, # This includes the approved :scope from authorization code
-          base_url: request.base_url
-        )
+        token_response = Services::TokenService.generate_token_response(token_data, base_url: server_origin)
 
         render json: token_response, content_type: 'application/json'
       rescue StandardError => e
@@ -341,6 +353,11 @@ module Mcp
           return render_error('invalid_grant', 'Refresh token was issued to a different client')
         end
 
+        # If the client presents a secret it MUST be valid (see helper).
+        unless client_secret_valid_if_presented?(token_data[:client_id])
+          return render_error('invalid_client', 'Client authentication failed', status: :unauthorized)
+        end
+
         # RFC 8707: a resource indicator, when supplied, must name this server.
         return render_error('invalid_target', 'Invalid resource indicator') unless valid_requested_resource?
 
@@ -351,14 +368,18 @@ module Mcp
         # Include resource parameter if provided
         token_data[:resource] = params[:resource] if params[:resource]
 
-        # Rotate refresh token (OAuth 2.1 requirement) BEFORE issuing the new one
-        # so a replayed refresh token cannot mint a second token family.
-        Services::TokenService.revoke_refresh_token(params[:refresh_token])
+        # Rotate the refresh token (OAuth 2.1) BEFORE issuing the new one, gated on
+        # an atomic delete: only the request that actually removed the row proceeds,
+        # so two concurrent redemptions of the same token can't each mint a new
+        # family. The loser is treated as an invalid grant.
+        unless Services::TokenService.revoke_refresh_token(params[:refresh_token])
+          return render_error('invalid_grant', 'Refresh token is invalid or expired')
+        end
 
         # Generate new tokens
         token_response = Services::TokenService.generate_token_response(
           token_data,
-          base_url: request.base_url
+          base_url: server_origin
         )
 
         render json: token_response, content_type: 'application/json'
@@ -385,6 +406,27 @@ module Mcp
       # identity matches the client a grant (code/refresh token) was issued to.
       def requesting_client_owns?(client_id)
         requesting_client_id.present? && requesting_client_id == client_id
+      end
+
+      # client_secret presented on a token request, from HTTP Basic auth or the
+      # client_secret form param (nil if the client presents none).
+      def presented_client_secret
+        _, basic_secret = extract_client_credentials_from_basic
+        basic_secret.presence || params[:client_secret].presence
+      end
+
+      # A client that PRESENTS a secret at the token endpoint must present a
+      # valid one (constant-time compare). Public/PKCE clients present no secret
+      # and pass through unaffected. NOTE: this does not yet *require* a secret
+      # for confidential clients — that enforcement arrives with the
+      # token_endpoint_auth_method column in the storage migration (Phase 2).
+      def client_secret_valid_if_presented?(client_id)
+        secret = presented_client_secret
+        return true if secret.blank?
+
+        client = Mcp::Auth::OauthClient.find_by(client_id: client_id)
+        client.present? &&
+          ActiveSupport::SecurityUtils.secure_compare(client.client_secret.to_s, secret.to_s)
       end
 
       # === Client Registration ===
@@ -617,8 +659,18 @@ module Mcp
       end
 
       def authorization_server_url
-        config_url = Rails.application.config.mcp_auth.authorization_server_url
-        config_url.presence || "#{request.scheme}://#{request.host_with_port}"
+        server_origin
+      end
+
+      # The pinned public origin of this server. Prefer the explicitly configured
+      # authorization_server_url so issued-token `iss`/`aud`, the `iss` returned
+      # on the authorization redirect, and the canonical resource cannot be
+      # poisoned by a forged Host / X-Forwarded-Host header. Falls back to the
+      # request origin ONLY when unconfigured — in which case the host app MUST
+      # restrict permitted hosts via Rails `config.hosts`.
+      def server_origin
+        configured = Mcp::Auth.configuration&.authorization_server_url
+        configured.presence || "#{request.scheme}://#{request.host_with_port}"
       end
 
       # === Error Handling ===

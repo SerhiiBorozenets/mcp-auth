@@ -22,7 +22,7 @@ module Mcp
               scope: scope,
               user: user,
               org: org,
-              expires_at: authorization_code_lifetime.minutes.from_now
+              expires_at: authorization_code_lifetime.seconds.from_now
             )
 
             Rails.logger.info "[AuthorizationService] Authorization code generated for user #{user.id}"
@@ -101,8 +101,13 @@ module Mcp
 
           private
 
+          # Authorization-code TTL in SECONDS (matching every other lifetime in
+          # the gem). Read from the single canonical config source so an app that
+          # configures via Mcp::Auth.configure and one that relies on defaults
+          # agree; 1800s = 30 minutes. (Historically this was read from a second
+          # config object and applied as `.minutes`, yielding 30-HOUR codes.)
           def authorization_code_lifetime
-            Rails.application.config.mcp_auth.authorization_code_lifetime || 30
+            Mcp::Auth.configuration&.authorization_code_lifetime || 1800
           end
         end
       end

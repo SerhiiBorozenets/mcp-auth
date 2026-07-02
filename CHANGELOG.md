@@ -7,6 +7,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+Second security-hardening round (audit follow-ups). Phase 1 — code-level fixes,
+no migration:
+
+### Security (breaking where noted)
+- **Authorization-code TTL was 30 HOURS, not 30 minutes.** The lifetime (a value
+  in seconds, e.g. `1800`) was applied with `.minutes`. Now applied as seconds,
+  and read from the single canonical config source so configured and default
+  deployments agree. **Breaking:** codes now expire in ~30 min as intended.
+- **Issuer / audience / discovery URLs are pinned to the configured origin.**
+  `iss`, `aud`, the canonical resource, and all discovery/JWKS URLs derive from
+  `authorization_server_url` when set, instead of the raw request Host — closing
+  a Host/`X-Forwarded-Host` header-injection vector. **When unset**, the value
+  still falls back to the request origin, so the host app MUST restrict permitted
+  hosts via Rails `config.hosts`.
+- **JWT validation hardened.** Access tokens now carry a `token_use` claim and an
+  id_token can no longer be replayed as an access token; decode enforces
+  `required_claims` (`iss`/`aud`/`sub`/`exp`) with a bounded clock-skew leeway;
+  a missing audience is no longer silently accepted.
+- **Confidential-client auth at the token endpoint.** A `client_secret` presented
+  on a code/refresh request is now verified (constant-time); an invalid secret is
+  rejected. (Full *requirement* of a secret for confidential clients lands with
+  the `token_endpoint_auth_method` column in Phase 2.)
+- **Refresh-token rotation is atomic.** Rotation is gated on a conditional delete,
+  so two concurrent redemptions of one refresh token can no longer each mint a
+  new token family.
+- **Consent enforces least privilege.** A client can no longer be granted a scope
+  it never requested; approved scopes are intersected with the requested set.
+- **`oauth_secret` must be set in production.** The gem no longer silently signs
+  tokens with `Rails.application.secret_key_base` in production (key separation);
+  a missing secret now raises. Dev/test still fall back.
+
+### Fixed
+- Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
+  `…_spec.rb`) that RSpec never ran, restoring ~130 lines of coverage.
+
 ## [0.5.0] - 2026-06-15
 
 Security-hardening release. Closes five OAuth 2.1 / MCP authorization

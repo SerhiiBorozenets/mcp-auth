@@ -67,6 +67,7 @@ RSpec.describe Mcp::Auth::Services::AuthorizationService do
     end
 
     it 'returns nil for expired code' do
+      code # materialize the code now, before travelling past its TTL
       travel_to(31.minutes.from_now) do
         data = described_class.validate_authorization_code(code)
         expect(data).to be_nil
