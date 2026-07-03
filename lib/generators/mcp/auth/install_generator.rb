@@ -35,6 +35,11 @@ module Mcp
           migration_template "hash_mcp_auth_secrets_at_rest.rb.erb",
                              "db/migrate/hash_mcp_auth_secrets_at_rest.rb",
                              migration_version: migration_version
+
+          # Confidential-client auth method + refresh-token reuse-detection columns.
+          migration_template "add_mcp_auth_confidential_client_and_reuse.rb.erb",
+                             "db/migrate/add_mcp_auth_confidential_client_and_reuse.rb",
+                             migration_version: migration_version
         end
 
         def copy_initializer

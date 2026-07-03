@@ -57,6 +57,25 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
     end
   end
 
+  describe 'token_endpoint_auth_method (confidential vs public, H1)' do
+    it 'defaults to none (public / PKCE client)' do
+      client = described_class.create!(client_name: 'X', redirect_uris: ['https://e.com/cb'])
+      expect(client.token_endpoint_auth_method).to eq('none')
+      expect(client).not_to be_confidential
+    end
+
+    it 'is confidential when registered with client_secret_basic' do
+      client = described_class.create!(
+        client_name: 'X', redirect_uris: ['https://e.com/cb'], token_endpoint_auth_method: 'client_secret_basic'
+      )
+      expect(client).to be_confidential
+    end
+
+    it 'rejects an unsupported auth method' do
+      expect(build(:oauth_client, token_endpoint_auth_method: 'private_key_jwt')).not_to be_valid
+    end
+  end
+
   describe 'redirect_uri validation (RFC 7591/8252)' do
     it 'rejects an authorization_code client with no redirect URIs' do
       client = build(:oauth_client, redirect_uris: [])

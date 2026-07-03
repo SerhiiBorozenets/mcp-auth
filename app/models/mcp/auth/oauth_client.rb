@@ -18,8 +18,16 @@ module Mcp
       SUPPORTED_GRANT_TYPES = %w[authorization_code refresh_token].freeze
       SUPPORTED_RESPONSE_TYPES = %w[code].freeze
 
+      # Token-endpoint authentication methods (RFC 7591 / RFC 8414). `none` is a
+      # PUBLIC client (PKCE only, no client authentication); the others are
+      # CONFIDENTIAL clients that MUST present a valid client_secret. Defaults to
+      # `none` so existing/registered clients keep working — a client opts into
+      # confidential auth explicitly at registration.
+      TOKEN_ENDPOINT_AUTH_METHODS = %w[none client_secret_basic client_secret_post].freeze
+
       validates :client_id, presence: true, uniqueness: true
       validates :client_secret, presence: true
+      validates :token_endpoint_auth_method, inclusion: { in: TOKEN_ENDPOINT_AUTH_METHODS }
       validate :validate_redirect_uris
       validate :validate_grant_and_response_types
 
@@ -68,6 +76,12 @@ module Mcp
         Mcp::Auth::SecretHashing.match?(client_secret, presented)
       end
 
+      # Confidential clients MUST authenticate at the token endpoint; public
+      # clients (`none`) rely on PKCE.
+      def confidential?
+        token_endpoint_auth_method.to_s != 'none'
+      end
+
       private
 
       def set_defaults
@@ -76,6 +90,7 @@ module Mcp
         self.grant_types ||= %w[authorization_code refresh_token]
         self.response_types ||= %w[code]
         self.scope ||= Mcp::Auth::ScopeRegistry.default_scope_string
+        self.token_endpoint_auth_method = 'none' if token_endpoint_auth_method.blank?
       end
 
       # Digest the secret before it is written. The plaintext (generated or

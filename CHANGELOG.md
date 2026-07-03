@@ -48,6 +48,17 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   are returned once to the client and matched by digest thereafter.
 - **Dynamic Client Registration rejects unsupported grant/response types**
   (RFC 7591 §2) instead of storing arbitrary metadata.
+- **Refresh-token reuse detection** (OAuth 2.1 §4.14.2). Rotation now marks the
+  presented token revoked (grouped by a `family_id`) instead of deleting it, so
+  replaying an already-rotated token is detected as theft and the **entire token
+  family is revoked**. Rotation is atomic (only the request that flips
+  `revoked_at` wins), superseding the delete-based race fix.
+- **Confidential-client authentication is now enforced.** Clients carry a
+  `token_endpoint_auth_method`; a confidential client (`client_secret_basic` /
+  `client_secret_post`) MUST present a valid secret at the token endpoint, while
+  a public client (`none`, the default) relies on PKCE. **Existing clients
+  default to `none`, so nothing that worked before starts requiring a secret** —
+  a client opts into confidential auth explicitly at registration.
 
 ### Fixed
 - Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
@@ -66,22 +77,24 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
 
 ### Upgrade
 
-No schema change — the columns are unchanged; this is a data migration that
-rewrites existing plaintext to `sha256$` digests **in place**:
+Two migrations: a data backfill that hashes existing secrets **in place** (no
+schema change), and an additive column migration (`token_endpoint_auth_method`
+on clients; `family_id` + `revoked_at` on refresh tokens):
 
 ```bash
 bundle update mcp-auth
-rails generate mcp:auth:upgrade   # copies only the hashing migration
-rails db:migrate                  # backfills existing plaintext -> sha256$ digest
+rails generate mcp:auth:upgrade   # copies both pending migrations
+rails db:migrate
 ```
 
 The backfill hashes the plaintext already present in each column, so **existing
 clients and tokens keep working without re-registration** — the client still
-presents its original value and the gem re-hashes it to match. With
-`secret_dual_read` on (default) the deploy is safe for rolling releases and
-rollback. Once every row is hashed and old code is gone, set
-`config.secret_dual_read = false` to reject plaintext-form matches. The
-migration is idempotent and irreversible.
+presents its original value and the gem re-hashes it to match. Existing clients
+get `token_endpoint_auth_method = 'none'` (public), so none of them suddenly
+requires a secret. With `secret_dual_read` on (default) the deploy is safe for
+rolling releases and rollback; once every row is hashed and old code is gone,
+set `config.secret_dual_read = false` to reject plaintext-form matches. The
+hashing backfill is idempotent and irreversible.
 
 ## [0.5.0] - 2026-06-15
 

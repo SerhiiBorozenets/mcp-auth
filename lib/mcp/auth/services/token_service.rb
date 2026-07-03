@@ -133,7 +133,10 @@ module Mcp
           end
 
           # Generate refresh token. The opaque value is returned to the client in
-          # plaintext, but only its digest is persisted (hashed at rest).
+          # plaintext, but only its digest is persisted (hashed at rest). Tokens
+          # descend within a `family_id`: the first issuance starts a new family;
+          # a rotation reuses the presented token's family so a later replay can
+          # be detected as reuse.
           def generate_refresh_token(data)
             refresh_token = SecureRandom.hex(32)
 
@@ -147,6 +150,7 @@ module Mcp
                 scope: data[:scope],
                 user_id: data[:user_id],
                 org_id: data[:org_id],
+                family_id: data[:family_id].presence || SecureRandom.uuid,
                 expires_at: expires_at
               )
 
@@ -156,6 +160,33 @@ module Mcp
               Rails.logger.error "[TokenService] Failed to create refresh token: #{e.message}"
               nil
             end
+          end
+
+          # Look up the refresh-token record for a presented value in ANY state
+          # (active, expired, or revoked) so the caller can implement reuse
+          # detection. Honors dual-read (digest or legacy plaintext).
+          def find_refresh_token(raw)
+            return nil if raw.blank?
+
+            Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(raw)).first
+          end
+
+          # Atomically consume a refresh token by flipping revoked_at from NULL.
+          # Returns true only for the request that actually performed the flip, so
+          # concurrent redemptions of the same token can't both rotate.
+          def rotate_refresh_token(record)
+            Mcp::Auth::RefreshToken
+              .where(id: record.id, revoked_at: nil)
+              .update_all(revoked_at: Time.current) == 1
+          end
+
+          # Revoke every still-live token in a family (used on reuse detection).
+          def revoke_refresh_family(family_id)
+            return 0 if family_id.blank?
+
+            Mcp::Auth::RefreshToken
+              .where(family_id: family_id, revoked_at: nil)
+              .update_all(revoked_at: Time.current)
           end
 
           # Validate refresh token

@@ -356,12 +356,16 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(JSON.parse(response.body)['scope']).to eq('mcp:read')
     end
 
-    it 'rotates the refresh token' do
+    it 'rotates the refresh token (marks the presented one revoked for reuse detection)' do
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
       }
 
-      expect(Mcp::Auth::RefreshToken.find_by(id: refresh.id)).to be_nil
+      expect(response).to have_http_status(:ok)
+      expect(refresh.reload.revoked_at).to be_present
+      # A fresh successor is issued in the same family.
+      successor = Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil).last
+      expect(successor).to be_present
     end
 
     it 'rejects redemption by a client other than the one it was issued to (OAuth 2.1 §4.3.1)' do
@@ -406,7 +410,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
     end
 
     it 'issues no tokens when a racing request already rotated the token (M1)' do
-      allow(Mcp::Auth::Services::TokenService).to receive(:revoke_refresh_token).and_return(false)
+      allow(Mcp::Auth::Services::TokenService).to receive(:rotate_refresh_token).and_return(false)
 
       expect do
         post :token, params: {
@@ -416,6 +420,53 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
       expect(response).to have_http_status(:bad_request)
       expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+    end
+
+    it 'detects reuse of an already-rotated token and revokes the whole family (M3)' do
+      # First redemption rotates `refresh` (marks it revoked) and issues a successor.
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+      successor_raw = JSON.parse(response.body)['refresh_token']
+
+      # Replaying the now-revoked original is reuse: rejected, and the whole family
+      # (including the still-valid successor) is revoked.
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+
+      # The successor no longer works either.
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: successor_raw, client_id: client.client_id
+      }
+      expect(response).to have_http_status(:bad_request)
+      expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil)).to be_empty
+    end
+  end
+
+  describe 'POST #token confidential-client enforcement (full H1)' do
+    let(:confidential) { create(:oauth_client, token_endpoint_auth_method: 'client_secret_basic') }
+    let!(:refresh) { create(:refresh_token, oauth_client: confidential, scope: 'mcp:read') }
+
+    it 'rejects a confidential client that presents NO secret' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: confidential.client_id
+      }
+
+      expect(response).to have_http_status(:unauthorized)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_client')
+      expect(refresh.reload.revoked_at).to be_nil # not rotated
+    end
+
+    it 'accepts a confidential client that presents its valid secret' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token,
+        client_id: confidential.client_id, client_secret: confidential.plaintext_secret
+      }
+
+      expect(response).to have_http_status(:ok)
     end
   end
 end

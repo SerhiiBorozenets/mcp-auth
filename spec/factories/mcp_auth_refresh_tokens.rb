@@ -12,6 +12,7 @@ FactoryBot.define do
     token { Mcp::Auth::SecretHashing.digest(raw_token) }
     client_id { oauth_client.client_id }
     scope { 'mcp:read mcp:write' }
+    family_id { SecureRandom.uuid }
     expires_at { 30.days.from_now }
 
     after(:build) { |record, evaluator| record.plaintext_token = evaluator.raw_token }
