@@ -33,8 +33,10 @@ module Mcp
               # Revocation check (RFC 7009): a JWT remains cryptographically valid
               # until it expires, so a stored-and-still-present row is what makes
               # `revoke` actually take effect. Without this, destroyed tokens would
-              # keep validating until natural expiry.
-              return nil unless Mcp::Auth::AccessToken.active.exists?(token: token)
+              # keep validating until natural expiry. The row is keyed by the
+              # token's digest (tokens are hashed at rest).
+              candidates = SecretHashing.lookup_candidates(token)
+              return nil unless Mcp::Auth::AccessToken.active.where(token: candidates).exists?
 
               # Validate audience if a resource was provided (RFC 8707). `aud` is a
               # required claim (enforced at decode), so a token lacking it never
@@ -130,7 +132,8 @@ module Mcp
             raise
           end
 
-          # Generate refresh token
+          # Generate refresh token. The opaque value is returned to the client in
+          # plaintext, but only its digest is persisted (hashed at rest).
           def generate_refresh_token(data)
             refresh_token = SecureRandom.hex(32)
 
@@ -139,7 +142,7 @@ module Mcp
 
             begin
               Mcp::Auth::RefreshToken.create!(
-                token: refresh_token,
+                token: SecretHashing.digest(refresh_token),
                 client_id: data[:client_id],
                 scope: data[:scope],
                 user_id: data[:user_id],
@@ -159,7 +162,7 @@ module Mcp
           def validate_refresh_token(refresh_token)
             return nil if refresh_token.blank?
 
-            token_record = Mcp::Auth::RefreshToken.find_by(token: refresh_token)
+            token_record = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).first
             return nil unless token_record
 
             # Check if token is expired
@@ -182,7 +185,7 @@ module Mcp
           def revoke_refresh_token(refresh_token)
             return false if refresh_token.blank?
 
-            deleted = Mcp::Auth::RefreshToken.where(token: refresh_token).delete_all
+            deleted = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).delete_all
             Rails.logger.info '[TokenService] Refresh token revoked' if deleted.positive?
             deleted.positive?
           end
@@ -468,7 +471,7 @@ module Mcp
             expires_at = data[:expires_at] || token_lifetime.seconds.from_now
 
             Mcp::Auth::AccessToken.create!(
-              token: token,
+              token: SecretHashing.digest(token),
               client_id: data[:client_id],
               resource: audience,
               scope: data[:scope],

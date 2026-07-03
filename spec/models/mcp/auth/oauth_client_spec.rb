@@ -32,6 +32,31 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
     end
   end
 
+  describe 'client_secret hashing at rest (H5)' do
+    let(:client) { described_class.create!(client_name: 'X', redirect_uris: ['https://e.com/cb']) }
+
+    it 'stores a digest, not the plaintext, and exposes the plaintext once' do
+      expect(client.plaintext_secret).to be_present
+      expect(client.client_secret).to start_with('sha256$')
+      expect(client.client_secret).not_to eq(client.plaintext_secret)
+    end
+
+    it 'verifies a correct secret and rejects a wrong one' do
+      expect(client.authenticate_secret(client.plaintext_secret)).to be true
+      expect(client.authenticate_secret('wrong')).to be false
+    end
+
+    it 'authenticates a legacy plaintext secret under dual-read, and rejects it once disabled' do
+      legacy = create(:oauth_client)
+      legacy.update_column(:client_secret, 'legacy-plaintext') # pre-migration row
+
+      expect(legacy.authenticate_secret('legacy-plaintext')).to be true
+
+      allow(Mcp::Auth.configuration).to receive(:secret_dual_read).and_return(false)
+      expect(legacy.authenticate_secret('legacy-plaintext')).to be false
+    end
+  end
+
   describe 'redirect_uri validation (RFC 7591/8252)' do
     it 'rejects an authorization_code client with no redirect URIs' do
       client = build(:oauth_client, redirect_uris: [])

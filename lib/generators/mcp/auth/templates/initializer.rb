@@ -214,6 +214,21 @@ end
   # keep verifying and both keys are published at /.well-known/jwks.json:
   # config.token_signing_additional_public_keys = [ENV['MCP_JWT_PREVIOUS_PUBLIC_KEY']]
 
+  # ============================================================================
+  # SECRETS HASHED AT REST — TRANSITIONAL DUAL-READ (OPTIONAL)
+  # ============================================================================
+  #
+  # Access tokens, refresh tokens, authorization codes, and client secrets are
+  # stored as one-way SHA-256 digests. While `secret_dual_read` is true (the
+  # default), a presented value is matched against BOTH its digest and any legacy
+  # PLAINTEXT row not yet backfilled — this makes the upgrade safe under rolling
+  # deploys and safe to roll back.
+  #
+  # After you have deployed this version, run `rails db:migrate` (backfills every
+  # row to a digest), and no old app code remains, HARDEN by turning it off so
+  # plaintext-form matches are rejected:
+  # config.secret_dual_read = false
+
 # ============================================================================
 # PROTECTING YOUR MCP ENDPOINT (RESOURCE SERVER)
 # ============================================================================

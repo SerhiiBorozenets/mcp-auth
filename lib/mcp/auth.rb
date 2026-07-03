@@ -2,6 +2,7 @@
 
 require 'mcp/auth/version'
 require 'mcp/auth/engine'
+require 'mcp/auth/secret_hashing'
 require 'mcp/auth/services/token_service'
 require 'mcp/auth/services/authorization_service'
 
@@ -40,7 +41,8 @@ module Mcp
                     :token_signing_private_key,
                     :token_signing_public_key,
                     :token_signing_additional_public_keys,
-                    :token_signing_kid
+                    :token_signing_kid,
+                    :secret_dual_read
 
       # token_signing_algorithm has a validating writer defined below, so only
       # the reader is generated here.
@@ -71,6 +73,13 @@ module Mcp
         # for verification and published in the JWKS during key rotation.
         @token_signing_additional_public_keys = []
         @token_signing_kid = nil
+        # Transitional dual-read for the "hash secrets at rest" migration. While
+        # true (the default), a presented secret/token/code is matched against
+        # BOTH its digest and any legacy plaintext row not yet backfilled — this
+        # is what makes the upgrade safe under rolling deploys and safe to roll
+        # back. Set to false once every row is hashed (the backfill migration has
+        # run and no old code remains) to reject plaintext-form matches.
+        @secret_dual_read = true
       end
 
       def token_signing_algorithm=(value)

@@ -38,9 +38,50 @@ no migration:
   tokens with `Rails.application.secret_key_base` in production (key separation);
   a missing secret now raises. Dev/test still fall back.
 
+Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
+
+### Security
+- **All persisted secrets are now hashed at rest.** Access-token JWTs, refresh
+  tokens, authorization codes, and client secrets are stored as SHA-256 digests
+  (prefixed `sha256$`); a database leak no longer yields usable credentials. The
+  plaintext client secret is returned exactly once at registration; tokens/codes
+  are returned once to the client and matched by digest thereafter.
+- **Dynamic Client Registration rejects unsupported grant/response types**
+  (RFC 7591 §2) instead of storing arbitrary metadata.
+
 ### Fixed
 - Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
   `…_spec.rb`) that RSpec never ran, restoring ~130 lines of coverage.
+- `mcp_auth:revoke_*` rake tasks now delete across the three tables inside a
+  transaction (no partial revocation on mid-way failure).
+
+### Added
+- **`rails generate mcp:auth:upgrade`** — copies only pending migrations for an
+  existing install (no initializer/view overwrite prompts, unlike re-running the
+  full install generator).
+- **`config.secret_dual_read`** (default `true`) — transitional dual-read: a
+  presented secret/token/code is matched against both its digest and any legacy
+  plaintext row not yet backfilled, so the upgrade is safe under rolling deploys
+  and safe to roll back. Set to `false` once every row is hashed to harden.
+
+### Upgrade
+
+No schema change — the columns are unchanged; this is a data migration that
+rewrites existing plaintext to `sha256$` digests **in place**:
+
+```bash
+bundle update mcp-auth
+rails generate mcp:auth:upgrade   # copies only the hashing migration
+rails db:migrate                  # backfills existing plaintext -> sha256$ digest
+```
+
+The backfill hashes the plaintext already present in each column, so **existing
+clients and tokens keep working without re-registration** — the client still
+presents its original value and the gem re-hashes it to match. With
+`secret_dual_read` on (default) the deploy is safe for rolling releases and
+rollback. Once every row is hashed and old code is gone, set
+`config.secret_dual_read = false` to reject plaintext-form matches. The
+migration is idempotent and irreversible.
 
 ## [0.5.0] - 2026-06-15
 
@@ -231,7 +272,8 @@ keep `HS256` until refresh tokens cycle out.
 - Protected Resource Metadata (RFC 9728)
 - Resource Indicators support (RFC 8707) for token audience binding
 - OpenID Connect Discovery support
-- Automatic middleware for protecting `/mcp/*` routes
+- Opt-in resource-server protection for MCP routes via the
+  `Mcp::Auth::ProtectedResource` concern
 - JWT access tokens with proper audience validation
 - Refresh token rotation for enhanced security
 - Database-backed token storage for revocation support

@@ -34,7 +34,7 @@ RSpec.describe Mcp::Auth::Services::AuthorizationService do
 
     it 'sets correct attributes' do
       code = described_class.generate_authorization_code(params, user: user, org: org)
-      record = Mcp::Auth::AuthorizationCode.find_by(code: code)
+      record = Mcp::Auth::AuthorizationCode.find_by(code: Mcp::Auth::SecretHashing.digest(code))
 
       expect(record.user).to eq(user)
       expect(record.org).to eq(org)
@@ -47,7 +47,7 @@ RSpec.describe Mcp::Auth::Services::AuthorizationService do
 
     it 'sets expiration to 30 minutes' do
       code = described_class.generate_authorization_code(params, user: user, org: org)
-      record = Mcp::Auth::AuthorizationCode.find_by(code: code)
+      record = Mcp::Auth::AuthorizationCode.find_by(code: Mcp::Auth::SecretHashing.digest(code))
 
       expect(record.expires_at).to be_within(1.minute).of(30.minutes.from_now)
     end
@@ -87,7 +87,7 @@ RSpec.describe Mcp::Auth::Services::AuthorizationService do
       data = described_class.consume_authorization_code(code)
 
       expect(data).to be_present
-      expect(Mcp::Auth::AuthorizationCode.find_by(code: code)).to be_nil
+      expect(Mcp::Auth::AuthorizationCode.find_by(code: Mcp::Auth::SecretHashing.digest(code))).to be_nil
     end
 
     it 'returns code data' do

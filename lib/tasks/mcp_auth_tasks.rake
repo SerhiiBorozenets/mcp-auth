@@ -55,9 +55,14 @@ namespace :mcp_auth do
 
     puts "Revoking all tokens for client: #{client_id}"
 
-    auth_codes = Mcp::Auth::AuthorizationCode.where(client_id: client_id).delete_all
-    access_tokens = Mcp::Auth::AccessToken.where(client_id: client_id).delete_all
-    refresh_tokens = Mcp::Auth::RefreshToken.where(client_id: client_id).delete_all
+    auth_codes = access_tokens = refresh_tokens = 0
+    # Wrap the three deletes in a transaction so a mid-way failure can't leave a
+    # client partially revoked (tokens gone but codes still live, or similar).
+    ActiveRecord::Base.transaction do
+      auth_codes = Mcp::Auth::AuthorizationCode.where(client_id: client_id).delete_all
+      access_tokens = Mcp::Auth::AccessToken.where(client_id: client_id).delete_all
+      refresh_tokens = Mcp::Auth::RefreshToken.where(client_id: client_id).delete_all
+    end
 
     puts "  - Removed #{auth_codes} authorization codes"
     puts "  - Removed #{access_tokens} access tokens"
@@ -77,9 +82,12 @@ namespace :mcp_auth do
 
     puts "Revoking all tokens for user: #{user_id}"
 
-    auth_codes = Mcp::Auth::AuthorizationCode.where(user_id: user_id).delete_all
-    access_tokens = Mcp::Auth::AccessToken.where(user_id: user_id).delete_all
-    refresh_tokens = Mcp::Auth::RefreshToken.where(user_id: user_id).delete_all
+    auth_codes = access_tokens = refresh_tokens = 0
+    ActiveRecord::Base.transaction do
+      auth_codes = Mcp::Auth::AuthorizationCode.where(user_id: user_id).delete_all
+      access_tokens = Mcp::Auth::AccessToken.where(user_id: user_id).delete_all
+      refresh_tokens = Mcp::Auth::RefreshToken.where(user_id: user_id).delete_all
+    end
 
     puts "  - Removed #{auth_codes} authorization codes"
     puts "  - Removed #{access_tokens} access tokens"

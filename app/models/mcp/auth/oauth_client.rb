@@ -8,10 +8,20 @@ module Mcp
 
       # Set defaults BEFORE validation
       before_validation :set_defaults, on: :create
+      # Hash the secret at rest just before persisting (covers both the
+      # auto-generated secret and one a caller sets explicitly).
+      before_save :hash_client_secret_at_rest
+
+      # The grant/response types this authorization server actually implements.
+      # Dynamic registration is rejected for anything outside these sets so a
+      # client cannot register metadata the server can't honor (RFC 7591 §2).
+      SUPPORTED_GRANT_TYPES = %w[authorization_code refresh_token].freeze
+      SUPPORTED_RESPONSE_TYPES = %w[code].freeze
 
       validates :client_id, presence: true, uniqueness: true
       validates :client_secret, presence: true
       validate :validate_redirect_uris
+      validate :validate_grant_and_response_types
 
       serialize :redirect_uris, coder: JSON
       serialize :grant_types, coder: JSON
@@ -35,6 +45,11 @@ module Mcp
                primary_key: :client_id,
                dependent: :destroy
 
+      # The generated plaintext secret, available only on the in-memory instance
+      # right after creation (never persisted). The registration response returns
+      # this once; only its digest is stored.
+      attr_reader :plaintext_secret
+
       def self.find_by_client_id(client_id)
         find_by(client_id: client_id)
       end
@@ -47,14 +62,30 @@ module Mcp
         grant_types&.include?(grant_type)
       end
 
+      # Constant-time verification of a presented client_secret against the stored
+      # digest (secrets are hashed at rest).
+      def authenticate_secret(presented)
+        Mcp::Auth::SecretHashing.match?(client_secret, presented)
+      end
+
       private
 
       def set_defaults
         self.client_id ||= SecureRandom.uuid
-        self.client_secret ||= SecureRandom.hex(32)
+        self.client_secret = SecureRandom.hex(32) if client_secret.blank?
         self.grant_types ||= %w[authorization_code refresh_token]
         self.response_types ||= %w[code]
         self.scope ||= Mcp::Auth::ScopeRegistry.default_scope_string
+      end
+
+      # Digest the secret before it is written. The plaintext (generated or
+      # caller-supplied) is captured on the in-memory instance first so the
+      # registration response can return it exactly once.
+      def hash_client_secret_at_rest
+        return if client_secret.blank? || Mcp::Auth::SecretHashing.hashed?(client_secret)
+
+        @plaintext_secret ||= client_secret
+        self.client_secret = Mcp::Auth::SecretHashing.digest(client_secret)
       end
 
       # RFC 7591 / RFC 8252: a client using the authorization_code grant must
@@ -72,6 +103,15 @@ module Mcp
 
         uris.each do |uri|
           errors.add(:redirect_uris, "contains an invalid redirect URI: #{uri}") unless valid_redirect_uri_format?(uri)
+        end
+      end
+
+      def validate_grant_and_response_types
+        (Array(grant_types) - SUPPORTED_GRANT_TYPES).each do |gt|
+          errors.add(:grant_types, "contains an unsupported grant type: #{gt}")
+        end
+        (Array(response_types) - SUPPORTED_RESPONSE_TYPES).each do |rt|
+          errors.add(:response_types, "contains an unsupported response type: #{rt}")
         end
       end
 

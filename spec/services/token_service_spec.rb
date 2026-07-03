@@ -104,12 +104,56 @@ RSpec.describe Mcp::Auth::Services::TokenService do
     end
   end
 
+  describe 'secrets hashed at rest (H5)' do
+    it 'stores only the access-token digest, never the raw JWT' do
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      stored = Mcp::Auth::AccessToken.last.token
+
+      expect(stored).to start_with('sha256$')
+      expect(stored).not_to eq(token)
+      expect(stored).to eq(Mcp::Auth::SecretHashing.digest(token))
+      # Round-trip: validation looks the token up by its digest.
+      expect(described_class.validate_access_token(token)).to be_present
+    end
+
+    it 'stores only the refresh-token digest, never the raw value' do
+      raw = described_class.generate_refresh_token(refresh_token_params)
+      stored = Mcp::Auth::RefreshToken.last.token
+
+      expect(stored).to start_with('sha256$')
+      expect(stored).not_to eq(raw)
+      expect(described_class.validate_refresh_token(raw)).to be_present
+    end
+
+    it 'still validates a token whose legacy plaintext row was hashed in place (backfill)' do
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      row = Mcp::Auth::AccessToken.last
+
+      row.update_column(:token, token) # simulate a pre-migration plaintext row
+      row.update_column(:token, Mcp::Auth::SecretHashing.digest(token)) # backfill hashes in place
+
+      expect(described_class.validate_access_token(token)).to be_present
+    end
+
+    it 'honors a legacy plaintext row under dual-read, and rejects it once disabled' do
+      token = described_class.generate_access_token(access_token_params, base_url: base_url)
+      Mcp::Auth::AccessToken.last.update_column(:token, token) # not-yet-backfilled plaintext row
+
+      # dual-read on (default): the not-yet-migrated row still resolves
+      expect(described_class.validate_access_token(token)).to be_present
+
+      # dual-read off: only the digest form is honored
+      allow(Mcp::Auth.configuration).to receive(:secret_dual_read).and_return(false)
+      expect(described_class.validate_access_token(token)).to be_nil
+    end
+  end
+
   describe 'access-token revocation takes effect (RFC 7009)' do
     it 'rejects a token once its stored row is destroyed' do
       token = described_class.generate_access_token(access_token_params, base_url: base_url)
       expect(described_class.validate_access_token(token)).to be_present
 
-      Mcp::Auth::AccessToken.find_by(token: token).destroy
+      Mcp::Auth::AccessToken.find_by(token: Mcp::Auth::SecretHashing.digest(token)).destroy
       expect(described_class.validate_access_token(token)).to be_nil
     end
   end
@@ -162,8 +206,8 @@ RSpec.describe Mcp::Auth::Services::TokenService do
 
     def store_row(token)
       Mcp::Auth::AccessToken.create!(
-        token: token, client_id: oauth_client.client_id, resource: "#{base_url}/mcp",
-        scope: 'mcp:read', user_id: user.id, expires_at: 1.hour.from_now
+        token: Mcp::Auth::SecretHashing.digest(token), client_id: oauth_client.client_id,
+        resource: "#{base_url}/mcp", scope: 'mcp:read', user_id: user.id, expires_at: 1.hour.from_now
       )
     end
 

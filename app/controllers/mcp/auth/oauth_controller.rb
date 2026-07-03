@@ -425,8 +425,7 @@ module Mcp
         return true if secret.blank?
 
         client = Mcp::Auth::OauthClient.find_by(client_id: client_id)
-        client.present? &&
-          ActiveSupport::SecurityUtils.secure_compare(client.client_secret.to_s, secret.to_s)
+        client.present? && client.authenticate_secret(secret)
       end
 
       # === Client Registration ===
@@ -450,7 +449,9 @@ module Mcp
       def format_client_response(client)
         {
           client_id: client.client_id,
-          client_secret: client.client_secret,
+          # Return the plaintext secret exactly once, at registration; only its
+          # digest is stored.
+          client_secret: client.plaintext_secret,
           client_id_issued_at: client.created_at.to_i,
           client_secret_expires_at: 0,
           redirect_uris: client.redirect_uris,
@@ -473,7 +474,7 @@ module Mcp
 
         client = Mcp::Auth::OauthClient.find_by(client_id: client_id)
         return nil unless client
-        return nil unless ActiveSupport::SecurityUtils.secure_compare(client.client_secret.to_s, client_secret.to_s)
+        return nil unless client.authenticate_secret(client_secret)
 
         client
       end
@@ -507,7 +508,8 @@ module Mcp
       end
 
       def revoke_access_for_client(token, client)
-        access_token = Mcp::Auth::AccessToken.find_by(token: token, client_id: client.client_id)
+        candidates = Mcp::Auth::SecretHashing.lookup_candidates(token)
+        access_token = Mcp::Auth::AccessToken.where(token: candidates, client_id: client.client_id).first
         return false unless access_token
 
         access_token.destroy
@@ -515,7 +517,8 @@ module Mcp
       end
 
       def revoke_refresh_for_client(token, client)
-        refresh_token = Mcp::Auth::RefreshToken.find_by(token: token, client_id: client.client_id)
+        candidates = Mcp::Auth::SecretHashing.lookup_candidates(token)
+        refresh_token = Mcp::Auth::RefreshToken.where(token: candidates, client_id: client.client_id).first
         return false unless refresh_token
 
         refresh_token.destroy

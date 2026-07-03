@@ -8,7 +8,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
   let(:client) { create(:oauth_client) }
   let(:other_client) { create(:oauth_client) }
   let(:basic_auth) do
-    encoded = Base64.strict_encode64("#{client.client_id}:#{client.client_secret}")
+    encoded = Base64.strict_encode64("#{client.client_id}:#{client.plaintext_secret}")
     "Basic #{encoded}"
   end
 
@@ -18,7 +18,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     context 'without client authentication' do
       it 'returns 401' do
-        post :revoke, params: { token: access_token.token }
+        post :revoke, params: { token: access_token.plaintext_token }
 
         expect(response).to have_http_status(:unauthorized)
         expect(JSON.parse(response.body)['error']).to eq('invalid_client')
@@ -29,14 +29,14 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       before { request.headers['Authorization'] = basic_auth }
 
       it 'revokes an access token owned by the client' do
-        post :revoke, params: { token: access_token.token }
+        post :revoke, params: { token: access_token.plaintext_token }
 
         expect(response).to have_http_status(:ok)
         expect(Mcp::Auth::AccessToken.find_by(id: access_token.id)).to be_nil
       end
 
       it 'revokes a refresh token owned by the client' do
-        post :revoke, params: { token: refresh_token.token }
+        post :revoke, params: { token: refresh_token.plaintext_token }
 
         expect(response).to have_http_status(:ok)
         expect(Mcp::Auth::RefreshToken.find_by(id: refresh_token.id)).to be_nil
@@ -51,7 +51,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       it 'returns 200 but does not revoke a token owned by another client' do
         foreign_token = create(:access_token, oauth_client: other_client)
 
-        post :revoke, params: { token: foreign_token.token }
+        post :revoke, params: { token: foreign_token.plaintext_token }
 
         expect(response).to have_http_status(:ok)
         expect(Mcp::Auth::AccessToken.find_by(id: foreign_token.id)).to be_present
@@ -71,7 +71,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       end
 
       it 'returns 401' do
-        post :revoke, params: { token: access_token.token }
+        post :revoke, params: { token: access_token.plaintext_token }
 
         expect(response).to have_http_status(:unauthorized)
       end
@@ -80,9 +80,9 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
     context 'with credentials in form params instead of Basic auth' do
       it 'accepts client_id + client_secret in the body' do
         post :revoke, params: {
-          token: access_token.token,
+          token: access_token.plaintext_token,
           client_id: client.client_id,
-          client_secret: client.client_secret
+          client_secret: client.plaintext_secret
         }
 
         expect(response).to have_http_status(:ok)
@@ -96,7 +96,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     context 'without client authentication' do
       it 'returns 401' do
-        post :introspect, params: { token: refresh_token.token }
+        post :introspect, params: { token: refresh_token.plaintext_token }
 
         expect(response).to have_http_status(:unauthorized)
       end
@@ -119,7 +119,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       end
 
       it 'returns active:true with claims for a refresh token owned by the client' do
-        post :introspect, params: { token: refresh_token.token }
+        post :introspect, params: { token: refresh_token.plaintext_token }
 
         body = JSON.parse(response.body)
         expect(body['active']).to be true
@@ -129,7 +129,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       it 'returns active:false for tokens owned by another client (anti-scanning)' do
         foreign_token = create(:refresh_token, oauth_client: other_client)
 
-        post :introspect, params: { token: foreign_token.token }
+        post :introspect, params: { token: foreign_token.plaintext_token }
 
         expect(JSON.parse(response.body)).to eq({ 'active' => false })
       end
@@ -203,6 +203,61 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
       expect(response).to have_http_status(:redirect)
       expect(Mcp::Auth::AuthorizationCode.last.scope.split).to contain_exactly('mcp:read')
+    end
+
+    it 'rejects a non-S256 (plain) code_challenge_method (PKCE downgrade)' do
+      get :authorize, params: base_params.merge(code_challenge: 'abc', code_challenge_method: 'plain')
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_request')
+    end
+  end
+
+  describe 'POST #register (RFC 7591 dynamic client registration)' do
+    it 'registers a client, returns the secret in plaintext, stores only its digest' do
+      post :register, params: { client_name: 'My Client', redirect_uris: ['https://c.example.com/cb'] }
+
+      body = JSON.parse(response.body)
+      expect(body['client_id']).to be_present
+      expect(body['client_secret']).to be_present
+
+      stored = Mcp::Auth::OauthClient.find_by(client_id: body['client_id'])
+      expect(stored.client_secret).to start_with('sha256$')
+      expect(stored.client_secret).not_to eq(body['client_secret'])
+    end
+
+    it 'rejects an unsupported grant_type (M4)' do
+      post :register, params: {
+        client_name: 'X', redirect_uris: ['https://c.example.com/cb'], grant_types: %w[password]
+      }
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_client_metadata')
+    end
+  end
+
+  describe 'GET #userinfo' do
+    let(:user) { create(:user) }
+    let(:token) do
+      Mcp::Auth::Services::TokenService.generate_access_token(
+        { client_id: client.client_id, user_id: user.id, scope: 'openid', resource: 'http://test.host/mcp' },
+        base_url: 'http://test.host'
+      )
+    end
+
+    it 'returns claims for a valid access token' do
+      request.headers['Authorization'] = "Bearer #{token}"
+
+      get :userinfo
+
+      expect(response).to have_http_status(:ok)
+      expect(JSON.parse(response.body)['sub']).to eq(user.id.to_s)
+    end
+
+    it 'returns 401 without a bearer token' do
+      get :userinfo
+
+      expect(response).to have_http_status(:unauthorized)
     end
   end
 
@@ -293,7 +348,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'narrows scope when a subset is requested (RFC 6749 §6)' do
       post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.token,
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token,
         scope: 'mcp:read', client_id: client.client_id
       }
 
@@ -303,7 +358,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'rotates the refresh token' do
       post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.token, client_id: client.client_id
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
       }
 
       expect(Mcp::Auth::RefreshToken.find_by(id: refresh.id)).to be_nil
@@ -311,7 +366,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'rejects redemption by a client other than the one it was issued to (OAuth 2.1 §4.3.1)' do
       post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.token, client_id: other_client.client_id
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: other_client.client_id
       }
 
       expect(response).to have_http_status(:bad_request)
@@ -322,7 +377,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'rejects a resource indicator that does not identify this server (RFC 8707)' do
       post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.token,
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token,
         client_id: client.client_id, resource: 'https://evil.example.com/mcp'
       }
 
@@ -332,7 +387,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'rejects a presented but invalid client_secret (H1)' do
       post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.token,
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token,
         client_id: client.client_id, client_secret: 'wrong-secret'
       }
 
@@ -343,8 +398,8 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'accepts a presented valid client_secret' do
       post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.token,
-        client_id: client.client_id, client_secret: client.client_secret
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token,
+        client_id: client.client_id, client_secret: client.plaintext_secret
       }
 
       expect(response).to have_http_status(:ok)
@@ -355,7 +410,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
       expect do
         post :token, params: {
-          grant_type: 'refresh_token', refresh_token: refresh.token, client_id: client.client_id
+          grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
         }
       end.not_to change(Mcp::Auth::AccessToken, :count)
 

@@ -2,7 +2,7 @@
 
 module Mcp
   module Auth
-    class RefreshToken < ActiveRecord::Base
+    class   RefreshToken < ActiveRecord::Base
       self.table_name = "mcp_auth_refresh_tokens"
 
       belongs_to :user
@@ -12,6 +12,10 @@ module Mcp
                  foreign_key: :client_id,
                  primary_key: :client_id,
                  optional: true
+
+      # Plaintext token, available only in memory (never persisted); the `token`
+      # column stores the digest.
+      attr_accessor :plaintext_token
 
       validates :token, presence: true, uniqueness: true
       validates :client_id, presence: true
