@@ -7,8 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-Second security-hardening round (audit follow-ups). Phase 1 — code-level fixes,
-no migration:
+## [0.6.0] - 2026-07-03
+
+Second security-hardening round (audit follow-ups), delivered in two phases.
+Phase 1 — code-level fixes, no migration:
 
 ### Security (breaking where noted)
 - **Authorization-code TTL was 30 HOURS, not 30 minutes.** The lifetime (a value
@@ -305,7 +307,8 @@ keep `HS256` until refresh tokens cycle out.
 - Token audience validation to prevent confused deputy attacks
 - WWW-Authenticate header with resource metadata on 401 responses
 
-[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.2.0...v0.3.0
