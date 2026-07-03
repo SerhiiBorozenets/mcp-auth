@@ -6,6 +6,7 @@ module Mcp
       skip_before_action :verify_authenticity_token, only: %i[token register revoke introspect userinfo]
       before_action :set_cors_headers
       before_action :handle_options_request
+      before_action :require_current_schema
       before_action :require_https, only: %i[authorize approve token register revoke introspect userinfo]
 
       # OAuth 2.1 Authorization endpoint (GET/POST)
@@ -668,6 +669,17 @@ module Mcp
 
       def handle_options_request
         head :no_content if request.method == 'OPTIONS'
+      end
+
+      # Fail with a clear, actionable error (not a cryptic `unknown attribute`)
+      # when the gem was upgraded but its migrations haven't been run.
+      def require_current_schema
+        missing = Mcp::Auth::SchemaGuard.missing_columns
+        return if missing.empty?
+
+        Rails.logger.error "[OAuth] #{Mcp::Auth::SchemaGuard.guidance(missing)}"
+        render_error('server_error', 'Server database schema is out of date; a pending migration must be run',
+                     status: :internal_server_error)
       end
 
       def require_https

@@ -69,6 +69,12 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   transaction (no partial revocation on mid-way failure).
 
 ### Added
+- **Pending-migration guard.** If the gem is upgraded but its migrations haven't
+  run, mcp-auth now says so instead of failing with a cryptic `unknown attribute`:
+  a clear warning is logged at boot, the OAuth endpoints return an actionable
+  `server_error` ("run a pending migration"), and `rake mcp_auth:doctor` reports
+  schema drift and exits non-zero. Fully guarded — never breaks boot, CI, or
+  `db:*` tasks when the database is absent or unmigrated.
 - **`rails generate mcp:auth:upgrade`** — copies only pending migrations for an
   existing install (no initializer/view overwrite prompts, unlike re-running the
   full install generator).

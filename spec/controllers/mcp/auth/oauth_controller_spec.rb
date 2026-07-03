@@ -234,6 +234,16 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(response).to have_http_status(:bad_request)
       expect(JSON.parse(response.body)['error']).to eq('invalid_client_metadata')
     end
+
+    it 'returns a clear error (not a cryptic crash) when a gem migration is pending' do
+      allow(Mcp::Auth::SchemaGuard).to receive(:missing_columns)
+        .and_return(['mcp_auth_oauth_clients.token_endpoint_auth_method'])
+
+      post :register, params: { client_name: 'X', redirect_uris: ['https://c.example.com/cb'] }
+
+      expect(response).to have_http_status(:internal_server_error)
+      expect(JSON.parse(response.body)['error']).to eq('server_error')
+    end
   end
 
   describe 'GET #userinfo' do

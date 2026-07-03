@@ -148,8 +148,9 @@ module Mcp
   end
 end
 
-# Loaded after the module body so they can reference Mcp::Auth::Configuration
-# and Mcp::Auth::ControllerHelpers defined above. The services are already
-# required at the top of this file.
+# Loaded after the module body so they can reference Mcp::Auth::Configuration,
+# Mcp::Auth::ControllerHelpers, and Mcp::Auth::Error defined above. The services
+# are already required at the top of this file.
 require 'mcp/auth/scope_registry'
 require 'mcp/auth/protected_resource'
+require 'mcp/auth/schema_guard'

@@ -27,6 +27,15 @@ module Mcp
         config.mcp_auth.refresh_token_lifetime = 2_592_000 # 30 days
         config.mcp_auth.authorization_code_lifetime = 1800 # 30 minutes
       end
+
+      # Surface a pending mcp-auth migration at boot so an operator who upgraded
+      # the gem without running migrations gets a clear, actionable warning
+      # instead of a cryptic runtime error on the first OAuth request. Never
+      # raises (missing_columns is fully guarded), so it can't break boot/CI.
+      config.after_initialize do
+        missing = Mcp::Auth::SchemaGuard.missing_columns
+        Rails.logger.warn("[mcp-auth] #{Mcp::Auth::SchemaGuard.guidance(missing)}") if missing.any?
+      end
     end
   end
 end

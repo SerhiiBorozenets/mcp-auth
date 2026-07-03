@@ -17,6 +17,20 @@ namespace :mcp_auth do
     puts "Cleanup complete!"
   end
 
+  desc "Check that the database schema matches the installed mcp-auth version"
+  task doctor: :environment do
+    missing = Mcp::Auth::SchemaGuard.missing_columns
+
+    if missing.empty?
+      puts "mcp-auth #{Mcp::Auth::VERSION}: database schema is up to date."
+    else
+      warn "mcp-auth #{Mcp::Auth::VERSION}: PENDING MIGRATION"
+      warn "  Missing: #{missing.join(', ')}"
+      warn '  Run: rails g mcp:auth:upgrade && rails db:migrate'
+      exit 1
+    end
+  end
+
   desc "Show MCP Auth statistics"
   task stats: :environment do
     puts "\nMCP Auth Statistics"
