@@ -2,11 +2,14 @@
 
 FactoryBot.define do
   factory :authorization_code, class: 'Mcp::Auth::AuthorizationCode' do
+    transient { raw_code { SecureRandom.hex(32) } }
+
     association :user, factory: :user
     association :org, factory: :org
     association :oauth_client, factory: :oauth_client
 
-    code { SecureRandom.hex(32) }
+    # Stored hashed at rest; tests present `plaintext_code`.
+    code { Mcp::Auth::SecretHashing.digest(raw_code) }
     client_id { oauth_client.client_id }
     redirect_uri { 'http://localhost:3000/callback' }
     code_challenge { Base64.urlsafe_encode64(Digest::SHA256.digest('test_verifier'), padding: false) }
@@ -14,5 +17,7 @@ FactoryBot.define do
     scope { 'mcp:read mcp:write' }
     resource { 'http://localhost:3000/mcp' }
     expires_at { 30.minutes.from_now }
+
+    after(:build) { |record, evaluator| record.plaintext_code = evaluator.raw_code }
   end
 end

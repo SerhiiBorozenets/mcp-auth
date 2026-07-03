@@ -33,8 +33,10 @@ module Mcp
               # Revocation check (RFC 7009): a JWT remains cryptographically valid
               # until it expires, so a stored-and-still-present row is what makes
               # `revoke` actually take effect. Without this, destroyed tokens would
-              # keep validating until natural expiry.
-              return nil unless Mcp::Auth::AccessToken.active.exists?(token: token)
+              # keep validating until natural expiry. The row is keyed by the
+              # token's digest (tokens are hashed at rest).
+              candidates = SecretHashing.lookup_candidates(token)
+              return nil unless Mcp::Auth::AccessToken.active.where(token: candidates).exists?
 
               # Validate audience if a resource was provided (RFC 8707). `aud` is a
               # required claim (enforced at decode), so a token lacking it never
@@ -130,7 +132,11 @@ module Mcp
             raise
           end
 
-          # Generate refresh token
+          # Generate refresh token. The opaque value is returned to the client in
+          # plaintext, but only its digest is persisted (hashed at rest). Tokens
+          # descend within a `family_id`: the first issuance starts a new family;
+          # a rotation reuses the presented token's family so a later replay can
+          # be detected as reuse.
           def generate_refresh_token(data)
             refresh_token = SecureRandom.hex(32)
 
@@ -139,11 +145,12 @@ module Mcp
 
             begin
               Mcp::Auth::RefreshToken.create!(
-                token: refresh_token,
+                token: SecretHashing.digest(refresh_token),
                 client_id: data[:client_id],
                 scope: data[:scope],
                 user_id: data[:user_id],
                 org_id: data[:org_id],
+                family_id: data[:family_id].presence || SecureRandom.uuid,
                 expires_at: expires_at
               )
 
@@ -155,11 +162,38 @@ module Mcp
             end
           end
 
+          # Look up the refresh-token record for a presented value in ANY state
+          # (active, expired, or revoked) so the caller can implement reuse
+          # detection. Honors dual-read (digest or legacy plaintext).
+          def find_refresh_token(raw)
+            return nil if raw.blank?
+
+            Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(raw)).first
+          end
+
+          # Atomically consume a refresh token by flipping revoked_at from NULL.
+          # Returns true only for the request that actually performed the flip, so
+          # concurrent redemptions of the same token can't both rotate.
+          def rotate_refresh_token(record)
+            Mcp::Auth::RefreshToken
+              .where(id: record.id, revoked_at: nil)
+              .update_all(revoked_at: Time.current) == 1
+          end
+
+          # Revoke every still-live token in a family (used on reuse detection).
+          def revoke_refresh_family(family_id)
+            return 0 if family_id.blank?
+
+            Mcp::Auth::RefreshToken
+              .where(family_id: family_id, revoked_at: nil)
+              .update_all(revoked_at: Time.current)
+          end
+
           # Validate refresh token
           def validate_refresh_token(refresh_token)
             return nil if refresh_token.blank?
 
-            token_record = Mcp::Auth::RefreshToken.find_by(token: refresh_token)
+            token_record = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).first
             return nil unless token_record
 
             # Check if token is expired
@@ -182,7 +216,7 @@ module Mcp
           def revoke_refresh_token(refresh_token)
             return false if refresh_token.blank?
 
-            deleted = Mcp::Auth::RefreshToken.where(token: refresh_token).delete_all
+            deleted = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).delete_all
             Rails.logger.info '[TokenService] Refresh token revoked' if deleted.positive?
             deleted.positive?
           end
@@ -468,7 +502,7 @@ module Mcp
             expires_at = data[:expires_at] || token_lifetime.seconds.from_now
 
             Mcp::Auth::AccessToken.create!(
-              token: token,
+              token: SecretHashing.digest(token),
               client_id: data[:client_id],
               resource: audience,
               scope: data[:scope],

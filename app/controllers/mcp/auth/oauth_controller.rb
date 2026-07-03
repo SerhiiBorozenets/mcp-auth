@@ -297,8 +297,8 @@ module Mcp
           return render_error('invalid_grant', 'Authorization code was issued to a different client')
         end
 
-        # If the client presents a secret it MUST be valid (see helper).
-        unless client_secret_valid_if_presented?(code_data[:client_id])
+        # Confidential clients must authenticate; public clients rely on PKCE.
+        unless client_authentication_valid?(code_data[:client_id])
           return render_error('invalid_client', 'Client authentication failed', status: :unauthorized)
         end
 
@@ -341,51 +341,59 @@ module Mcp
       end
 
       def handle_refresh_token_grant
-        token_data = Services::TokenService.validate_refresh_token(params[:refresh_token])
+        record = Services::TokenService.find_refresh_token(params[:refresh_token])
+        return render_error('invalid_grant', 'Refresh token is invalid or expired') unless record
 
-        return render_error('invalid_grant', 'Refresh token is invalid or expired') unless token_data
+        # OAuth 2.1 §4.14.2 reuse detection: a refresh token is single-use. If an
+        # already-rotated (revoked) token is presented again, treat it as theft —
+        # revoke the entire token family so the attacker AND the legitimate client
+        # are cut off (the client re-authorizes).
+        if record.revoked?
+          Services::TokenService.revoke_refresh_family(record.family_id)
+          Rails.logger.warn "[OAuth] Refresh-token reuse detected; family #{record.family_id} revoked"
+          return render_error('invalid_grant', 'Refresh token has already been used')
+        end
 
-        # OAuth 2.1 §4.3.1 / RFC 6749 §6: the authorization server MUST bind the
-        # refresh token to the client it was issued to and reject redemption by
-        # any other client. Without this a refresh token leaked to (or through) a
-        # second client could be exchanged for fresh access tokens.
-        unless requesting_client_owns?(token_data[:client_id])
+        return render_error('invalid_grant', 'Refresh token is invalid or expired') if record.expired?
+
+        # OAuth 2.1 §4.3.1 / RFC 6749 §6: bind the refresh token to its client.
+        unless requesting_client_owns?(record.client_id)
           return render_error('invalid_grant', 'Refresh token was issued to a different client')
         end
 
-        # If the client presents a secret it MUST be valid (see helper).
-        unless client_secret_valid_if_presented?(token_data[:client_id])
+        # Confidential clients must authenticate; public clients rely on PKCE.
+        unless client_authentication_valid?(record.client_id)
           return render_error('invalid_client', 'Client authentication failed', status: :unauthorized)
         end
 
         # RFC 8707: a resource indicator, when supplied, must name this server.
         return render_error('invalid_target', 'Invalid resource indicator') unless valid_requested_resource?
 
-        # RFC 6749 §6: a client may request a NARROWER scope on refresh, never a
-        # wider one. Silently dropping unknown/extra scopes preserves least privilege.
-        token_data[:scope] = narrow_scope(token_data[:scope], params[:scope]) if params[:scope].present?
-
-        # Include resource parameter if provided
-        token_data[:resource] = params[:resource] if params[:resource]
-
-        # Rotate the refresh token (OAuth 2.1) BEFORE issuing the new one, gated on
-        # an atomic delete: only the request that actually removed the row proceeds,
-        # so two concurrent redemptions of the same token can't each mint a new
-        # family. The loser is treated as an invalid grant.
-        unless Services::TokenService.revoke_refresh_token(params[:refresh_token])
-          return render_error('invalid_grant', 'Refresh token is invalid or expired')
-        end
-
-        # Generate new tokens
-        token_response = Services::TokenService.generate_token_response(
-          token_data,
-          base_url: server_origin
-        )
-
-        render json: token_response, content_type: 'application/json'
+        rotate_and_issue_from_refresh(record)
       rescue StandardError => e
         Rails.logger.error "[OAuth] Token refresh failed: #{e.message}"
         render_error('server_error', 'Failed to issue tokens', status: :internal_server_error)
+      end
+
+      # Rotate the presented refresh token and mint its successor. Rotation marks
+      # THIS token revoked atomically (only the request that flips revoked_at from
+      # NULL wins the race); the successor is issued in the SAME family so a future
+      # replay of this token is detectable as reuse. A client may narrow scope
+      # (RFC 6749 §6) but never widen it.
+      def rotate_and_issue_from_refresh(record)
+        scope = record.scope
+        scope = narrow_scope(scope, params[:scope]) if params[:scope].present?
+
+        unless Services::TokenService.rotate_refresh_token(record)
+          return render_error('invalid_grant', 'Refresh token is invalid or expired')
+        end
+
+        token_data = {
+          client_id: record.client_id, scope: scope, user_id: record.user_id,
+          org_id: record.org_id, family_id: record.family_id, resource: params[:resource]
+        }
+        token_response = Services::TokenService.generate_token_response(token_data, base_url: server_origin)
+        render json: token_response, content_type: 'application/json'
       end
 
       # Intersection of the originally granted scope and a requested subset.
@@ -415,18 +423,21 @@ module Mcp
         basic_secret.presence || params[:client_secret].presence
       end
 
-      # A client that PRESENTS a secret at the token endpoint must present a
-      # valid one (constant-time compare). Public/PKCE clients present no secret
-      # and pass through unaffected. NOTE: this does not yet *require* a secret
-      # for confidential clients — that enforcement arrives with the
-      # token_endpoint_auth_method column in the storage migration (Phase 2).
-      def client_secret_valid_if_presented?(client_id)
-        secret = presented_client_secret
-        return true if secret.blank?
-
+      # Token-endpoint client authentication (RFC 6749 §2.3):
+      #   * CONFIDENTIAL clients (token_endpoint_auth_method != 'none') MUST
+      #     present a valid client_secret.
+      #   * PUBLIC clients ('none') present no secret and rely on PKCE — but if
+      #     one IS presented it must still be valid.
+      def client_authentication_valid?(client_id)
         client = Mcp::Auth::OauthClient.find_by(client_id: client_id)
-        client.present? &&
-          ActiveSupport::SecurityUtils.secure_compare(client.client_secret.to_s, secret.to_s)
+        return false unless client
+
+        secret = presented_client_secret
+        if client.confidential?
+          secret.present? && client.authenticate_secret(secret)
+        else
+          secret.blank? || client.authenticate_secret(secret)
+        end
       end
 
       # === Client Registration ===
@@ -438,7 +449,10 @@ module Mcp
           response_types: params[:response_types] || %w[code],
           scope: params[:scope] || Mcp::Auth::ScopeRegistry.default_scope_string,
           client_name: params[:client_name] || 'MCP Client',
-          client_uri: params[:client_uri]
+          client_uri: params[:client_uri],
+          # Default to a PUBLIC (PKCE) client unless the caller opts into a
+          # confidential method; an unsupported value is rejected by the model.
+          token_endpoint_auth_method: params[:token_endpoint_auth_method].presence || 'none'
         }
       end
 
@@ -450,14 +464,16 @@ module Mcp
       def format_client_response(client)
         {
           client_id: client.client_id,
-          client_secret: client.client_secret,
+          # Return the plaintext secret exactly once, at registration; only its
+          # digest is stored.
+          client_secret: client.plaintext_secret,
           client_id_issued_at: client.created_at.to_i,
           client_secret_expires_at: 0,
           redirect_uris: client.redirect_uris,
           grant_types: client.grant_types,
           response_types: client.response_types,
           scope: client.scope,
-          token_endpoint_auth_method: 'client_secret_basic',
+          token_endpoint_auth_method: client.token_endpoint_auth_method,
           client_name: client.client_name,
           client_uri: client.client_uri
         }.compact
@@ -473,7 +489,7 @@ module Mcp
 
         client = Mcp::Auth::OauthClient.find_by(client_id: client_id)
         return nil unless client
-        return nil unless ActiveSupport::SecurityUtils.secure_compare(client.client_secret.to_s, client_secret.to_s)
+        return nil unless client.authenticate_secret(client_secret)
 
         client
       end
@@ -507,7 +523,8 @@ module Mcp
       end
 
       def revoke_access_for_client(token, client)
-        access_token = Mcp::Auth::AccessToken.find_by(token: token, client_id: client.client_id)
+        candidates = Mcp::Auth::SecretHashing.lookup_candidates(token)
+        access_token = Mcp::Auth::AccessToken.where(token: candidates, client_id: client.client_id).first
         return false unless access_token
 
         access_token.destroy
@@ -515,7 +532,8 @@ module Mcp
       end
 
       def revoke_refresh_for_client(token, client)
-        refresh_token = Mcp::Auth::RefreshToken.find_by(token: token, client_id: client.client_id)
+        candidates = Mcp::Auth::SecretHashing.lookup_candidates(token)
+        refresh_token = Mcp::Auth::RefreshToken.where(token: candidates, client_id: client.client_id).first
         return false unless refresh_token
 
         refresh_token.destroy

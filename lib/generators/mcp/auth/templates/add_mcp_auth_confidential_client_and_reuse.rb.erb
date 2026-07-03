@@ -1,0 +1,18 @@
+class AddMcpAuthConfidentialClientAndReuse < ActiveRecord::Migration<%= migration_version %>
+  # Adds columns for:
+  #   * confidential-client authentication — `token_endpoint_auth_method` on
+  #     clients. Existing rows default to 'none' (public / PKCE), so no already-
+  #     registered client is suddenly required to send a secret — a client opts
+  #     into confidential auth explicitly at (re-)registration.
+  #   * refresh-token reuse detection — `family_id` groups a rotation chain and
+  #     `revoked_at` marks a consumed token, so replaying a rotated token is
+  #     detected and the whole family is revoked.
+  def change
+    add_column :mcp_auth_oauth_clients, :token_endpoint_auth_method, :string,
+               null: false, default: 'none'
+
+    add_column :mcp_auth_refresh_tokens, :family_id, :string
+    add_column :mcp_auth_refresh_tokens, :revoked_at, :datetime
+    add_index  :mcp_auth_refresh_tokens, :family_id
+  end
+end

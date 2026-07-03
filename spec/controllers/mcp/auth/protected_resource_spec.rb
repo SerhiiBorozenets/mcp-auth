@@ -41,7 +41,7 @@ RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
 
     it 'rejects a revoked token' do
       revoked = token
-      Mcp::Auth::AccessToken.find_by(token: revoked).destroy
+      Mcp::Auth::AccessToken.find_by(token: Mcp::Auth::SecretHashing.digest(revoked)).destroy
       request.headers['Authorization'] = "Bearer #{revoked}"
 
       get :index
