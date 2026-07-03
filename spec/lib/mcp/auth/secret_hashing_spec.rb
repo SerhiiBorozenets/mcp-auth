@@ -12,16 +12,29 @@ RSpec.describe Mcp::Auth::SecretHashing do
       expect(digest).to eq("sha256$#{Digest::SHA256.hexdigest('s3cret')}")
     end
 
-    it 'is idempotent (an already-hashed value is returned unchanged)' do
+    it 're-hashes an already-hashed value (a stored digest is never itself a valid input)' do
       once = described_class.digest('s3cret')
       twice = described_class.digest(once)
 
-      expect(twice).to eq(once)
+      expect(twice).not_to eq(once)
+      expect(described_class.digest(once)).to eq(twice) # still deterministic
     end
 
     it 'returns blank input unchanged' do
       expect(described_class.digest('')).to eq('')
       expect(described_class.digest(nil)).to be_nil
+    end
+  end
+
+  describe 'a stored digest cannot be replayed as a credential (DB-leak defense)' do
+    it 'is not offered as a lookup candidate for itself' do
+      stored = described_class.digest('realtoken')
+      expect(described_class.lookup_candidates(stored)).not_to include(stored)
+    end
+
+    it 'does not authenticate when presented in place of the plaintext' do
+      stored = described_class.digest('realsecret')
+      expect(described_class.match?(stored, stored)).to be false
     end
   end
 

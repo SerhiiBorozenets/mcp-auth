@@ -189,12 +189,26 @@ module Mcp
               .update_all(revoked_at: Time.current)
           end
 
+          # Delete the access tokens for a (user, client) pair. Called on
+          # refresh-token-reuse (theft) detection so the already-issued access
+          # token(s) are cut off immediately, not left valid until natural expiry.
+          # Access tokens aren't grouped by family_id, so we scope by the
+          # principal that the compromised family belonged to.
+          def revoke_access_tokens_for(user_id:, client_id:)
+            Mcp::Auth::AccessToken.where(user_id: user_id, client_id: client_id).delete_all
+          end
+
           # Validate refresh token
           def validate_refresh_token(refresh_token)
             return nil if refresh_token.blank?
 
             token_record = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).first
             return nil unless token_record
+
+            # A rotated/revoked token is no longer active (RFC 7662): rotation now
+            # marks `revoked_at` instead of deleting the row, so introspection must
+            # exclude it explicitly rather than relying on the row being gone.
+            return nil if token_record.revoked?
 
             # Check if token is expired
             return nil if token_record.expires_at < Time.current
@@ -206,19 +220,6 @@ module Mcp
               user_id: token_record.user_id,
               org_id: token_record.org_id
             }
-          end
-
-          # Revoke a refresh token (RFC 7009) atomically. Deletes in a single
-          # DELETE ... WHERE and reports whether a row was actually removed, so a
-          # caller can use the boolean as a rotation gate: when two requests race
-          # to redeem the same refresh token, exactly one sees `true` and may
-          # issue a new token family; the loser sees `false`.
-          def revoke_refresh_token(refresh_token)
-            return false if refresh_token.blank?
-
-            deleted = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).delete_all
-            Rails.logger.info '[TokenService] Refresh token revoked' if deleted.positive?
-            deleted.positive?
           end
 
           # Generate complete token response

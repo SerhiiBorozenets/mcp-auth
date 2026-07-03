@@ -39,8 +39,15 @@ module Mcp
         []
       end
 
+      # Memoized fast path for the per-request guard. Columns are only ever ADDED
+      # by a migration + restart, so once the schema is current for this process
+      # it stays current — we can cache the affirmative and skip the check on
+      # every subsequent request. A negative result is NOT cached, so the guard
+      # keeps reporting the problem until it's actually resolved.
       def up_to_date?
-        missing_columns.empty?
+        return true if @up_to_date
+
+        @up_to_date = missing_columns.empty?
       end
 
       # Raise unless the schema is current (used where a hard failure is wanted).

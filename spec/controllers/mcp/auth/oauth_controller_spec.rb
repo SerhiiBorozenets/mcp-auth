@@ -133,6 +133,14 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
         expect(JSON.parse(response.body)).to eq({ 'active' => false })
       end
+
+      it 'reports a revoked (rotated) refresh token as inactive (RFC 7662)' do
+        revoked = create(:refresh_token, oauth_client: client, revoked_at: Time.current)
+
+        post :introspect, params: { token: revoked.plaintext_token }
+
+        expect(JSON.parse(response.body)).to eq({ 'active' => false })
+      end
     end
   end
 
@@ -453,6 +461,36 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       }
       expect(response).to have_http_status(:bad_request)
       expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil)).to be_empty
+    end
+
+    it 'does NOT revoke the family when a revoked token is replayed by the wrong client (no unauth DoS)' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+
+      # Replay the now-revoked original as a DIFFERENT (unauthorized) client.
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: other_client.client_id
+      }
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+      # Family revocation must NOT have fired for an unauthenticated replay.
+      expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil)).not_to be_empty
+    end
+
+    it 'revokes the principal\'s access tokens on reuse detection (theft response)' do
+      access = create(:access_token, oauth_client: client, user: refresh.user)
+
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+
+      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+      expect(Mcp::Auth::AccessToken.find_by(id: access.id)).to be_nil
     end
   end
 

@@ -52,9 +52,14 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   (RFC 7591 §2) instead of storing arbitrary metadata.
 - **Refresh-token reuse detection** (OAuth 2.1 §4.14.2). Rotation now marks the
   presented token revoked (grouped by a `family_id`) instead of deleting it, so
-  replaying an already-rotated token is detected as theft and the **entire token
-  family is revoked**. Rotation is atomic (only the request that flips
-  `revoked_at` wins), superseding the delete-based race fix.
+  an authenticated client replaying an already-rotated token is detected as theft
+  and the **entire family is revoked — both the refresh tokens and the access
+  tokens already issued to that principal** (immediate cut-off, not left valid
+  until expiry). Client authentication is checked *before* this reaction, so an
+  unauthenticated replay can't trigger family revocation. Rotation is atomic
+  (only the request that flips `revoked_at` wins), superseding the delete-based
+  race fix. The migration backfills a `family_id` for pre-existing tokens so
+  reuse detection covers them too.
 - **Confidential-client authentication is now enforced.** Clients carry a
   `token_endpoint_auth_method`; a confidential client (`client_secret_basic` /
   `client_secret_post`) MUST present a valid secret at the token endpoint, while

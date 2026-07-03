@@ -345,18 +345,9 @@ module Mcp
         record = Services::TokenService.find_refresh_token(params[:refresh_token])
         return render_error('invalid_grant', 'Refresh token is invalid or expired') unless record
 
-        # OAuth 2.1 §4.14.2 reuse detection: a refresh token is single-use. If an
-        # already-rotated (revoked) token is presented again, treat it as theft —
-        # revoke the entire token family so the attacker AND the legitimate client
-        # are cut off (the client re-authorizes).
-        if record.revoked?
-          Services::TokenService.revoke_refresh_family(record.family_id)
-          Rails.logger.warn "[OAuth] Refresh-token reuse detected; family #{record.family_id} revoked"
-          return render_error('invalid_grant', 'Refresh token has already been used')
-        end
-
-        return render_error('invalid_grant', 'Refresh token is invalid or expired') if record.expired?
-
+        # Authenticate the CLIENT before any state-changing reaction below, so an
+        # unauthenticated party who merely replays a stolen/expired token can't
+        # trigger family revocation (a DoS) or probe token state.
         # OAuth 2.1 §4.3.1 / RFC 6749 §6: bind the refresh token to its client.
         unless requesting_client_owns?(record.client_id)
           return render_error('invalid_grant', 'Refresh token was issued to a different client')
@@ -366,6 +357,20 @@ module Mcp
         unless client_authentication_valid?(record.client_id)
           return render_error('invalid_client', 'Client authentication failed', status: :unauthorized)
         end
+
+        # OAuth 2.1 §4.14.2 reuse detection: a refresh token is single-use. An
+        # authenticated client replaying an already-rotated (revoked) token means
+        # the token leaked — treat it as theft and revoke the entire family, both
+        # refresh tokens AND the access tokens already issued to this principal,
+        # so the attacker and the client are cut off immediately (client re-auths).
+        if record.revoked?
+          Services::TokenService.revoke_refresh_family(record.family_id)
+          Services::TokenService.revoke_access_tokens_for(user_id: record.user_id, client_id: record.client_id)
+          Rails.logger.warn "[OAuth] Refresh-token reuse detected; family #{record.family_id} revoked"
+          return render_error('invalid_grant', 'Refresh token has already been used')
+        end
+
+        return render_error('invalid_grant', 'Refresh token is invalid or expired') if record.expired?
 
         # RFC 8707: a resource indicator, when supplied, must name this server.
         return render_error('invalid_target', 'Invalid resource indicator') unless valid_requested_resource?
@@ -453,7 +458,8 @@ module Mcp
           client_uri: params[:client_uri],
           # Default to a PUBLIC (PKCE) client unless the caller opts into a
           # confidential method; an unsupported value is rejected by the model.
-          token_endpoint_auth_method: params[:token_endpoint_auth_method].presence || 'none'
+          token_endpoint_auth_method: params[:token_endpoint_auth_method].presence ||
+            Mcp::Auth::OauthClient::PUBLIC_AUTH_METHOD
         }
       end
 
@@ -674,10 +680,9 @@ module Mcp
       # Fail with a clear, actionable error (not a cryptic `unknown attribute`)
       # when the gem was upgraded but its migrations haven't been run.
       def require_current_schema
-        missing = Mcp::Auth::SchemaGuard.missing_columns
-        return if missing.empty?
+        return if Mcp::Auth::SchemaGuard.up_to_date? # memoized; cheap after warmup
 
-        Rails.logger.error "[OAuth] #{Mcp::Auth::SchemaGuard.guidance(missing)}"
+        Rails.logger.error "[OAuth] #{Mcp::Auth::SchemaGuard.guidance}"
         render_error('server_error', 'Server database schema is out of date; a pending migration must be run',
                      status: :internal_server_error)
       end

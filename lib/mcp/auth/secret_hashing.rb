@@ -28,11 +28,17 @@ module Mcp
 
       module_function
 
-      # Digest a plaintext value for storage/lookup. Already-hashed values are
-      # returned unchanged so the function is safe to apply idempotently (e.g. in
-      # the backfill migration). Blank input is returned as-is.
+      # Digest a plaintext value for storage/lookup. ALWAYS hashes non-blank
+      # input — including a value that already carries the prefix. This is a
+      # security property, not a nicety: a presented credential is only ever the
+      # raw secret, so if we instead returned an already-`sha256$`-prefixed input
+      # unchanged, an attacker who read the stored digest from the database could
+      # replay that digest verbatim and it would match the row (defeating
+      # hashing-at-rest). Re-hashing a prefixed value means the stored digest is
+      # never itself a valid credential. (The backfill migration achieves
+      # idempotency with its own prefix guard, not via this method.)
       def digest(value)
-        return value if value.blank? || hashed?(value)
+        return value if value.blank?
 
         "#{PREFIX}#{Digest::SHA256.hexdigest(value.to_s)}"
       end
