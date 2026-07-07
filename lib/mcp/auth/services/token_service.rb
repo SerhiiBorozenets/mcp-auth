@@ -108,6 +108,12 @@ module Mcp
               client_id: data[:client_id],
               email: user_data[:email],
               scope: data[:scope],
+              # Unique token id (RFC 7519 jti). Guarantees every access token is
+              # distinct even when two are issued in the same second for the same
+              # principal/scope (e.g. rapid or concurrent refreshes) — without it
+              # the JWTs would be byte-identical and collide on the unique token
+              # index at storage time.
+              jti: SecureRandom.uuid,
               # Marks this JWT as an access token so it can't be replayed as an
               # id_token (or vice versa); verified in validate_access_token.
               token_use: 'access',

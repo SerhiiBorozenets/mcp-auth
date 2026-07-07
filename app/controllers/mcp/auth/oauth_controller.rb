@@ -363,10 +363,18 @@ module Mcp
         # the token leaked — treat it as theft and revoke the entire family, both
         # refresh tokens AND the access tokens already issued to this principal,
         # so the attacker and the client are cut off immediately (client re-auths).
+        #
+        # EXCEPT within the rotation grace period: real MCP clients commonly fire
+        # several refreshes at once when the access token expires, so a replay
+        # moments after rotation is almost certainly a benign race/retry — reject
+        # it softly (the client falls back to the successor it already received)
+        # WITHOUT revoking the family. Only a replay after the window is theft.
         if record.revoked?
-          Services::TokenService.revoke_refresh_family(record.family_id)
-          Services::TokenService.revoke_access_tokens_for(user_id: record.user_id, client_id: record.client_id)
-          Rails.logger.warn "[OAuth] Refresh-token reuse detected; family #{record.family_id} revoked"
+          unless replayed_within_rotation_grace?(record)
+            Services::TokenService.revoke_refresh_family(record.family_id)
+            Services::TokenService.revoke_access_tokens_for(user_id: record.user_id, client_id: record.client_id)
+            Rails.logger.warn "[OAuth] Refresh-token reuse detected; family #{record.family_id} revoked"
+          end
           return render_error('invalid_grant', 'Refresh token has already been used')
         end
 
@@ -379,6 +387,17 @@ module Mcp
       rescue StandardError => e
         Rails.logger.error "[OAuth] Token refresh failed: #{e.message}"
         render_error('server_error', 'Failed to issue tokens', status: :internal_server_error)
+      end
+
+      # True when a revoked refresh token is being replayed within the rotation
+      # grace period — i.e. it was rotated only moments ago, so this is very
+      # likely a benign concurrent refresh/retry rather than theft. A grace of 0
+      # disables the window (any replay is treated as reuse).
+      def replayed_within_rotation_grace?(record)
+        grace = Mcp::Auth.configuration&.refresh_token_reuse_grace_period.to_i
+        return false unless grace.positive?
+
+        record.revoked_at.present? && record.revoked_at > grace.seconds.ago
       end
 
       # Rotate the presented refresh token and mint its successor. Rotation marks

@@ -59,7 +59,14 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   unauthenticated replay can't trigger family revocation. Rotation is atomic
   (only the request that flips `revoked_at` wins), superseding the delete-based
   race fix. The migration backfills a `family_id` for pre-existing tokens so
-  reuse detection covers them too.
+  reuse detection covers them too. A configurable **rotation grace period**
+  (`refresh_token_reuse_grace_period`, default 10s) treats a rotated token
+  replayed moments later as a benign concurrent-refresh race (rejected softly,
+  family kept) rather than theft, so well-behaved MCP clients that fire several
+  refreshes when the access token expires aren't logged out.
+- **Access tokens carry a unique `jti`** (RFC 7519) so two tokens issued in the
+  same second for the same principal/scope don't collide on the unique token
+  index (which previously raised on rapid/concurrent refreshes).
 - **Confidential-client authentication is now enforced.** Clients carry a
   `token_endpoint_auth_method`; a confidential client (`client_secret_basic` /
   `client_secret_post`) MUST present a valid secret at the token endpoint, while

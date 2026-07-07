@@ -42,7 +42,8 @@ module Mcp
                     :token_signing_public_key,
                     :token_signing_additional_public_keys,
                     :token_signing_kid,
-                    :secret_dual_read
+                    :secret_dual_read,
+                    :refresh_token_reuse_grace_period
 
       # token_signing_algorithm has a validating writer defined below, so only
       # the reader is generated here.
@@ -62,6 +63,14 @@ module Mcp
         @mcp_server_path = '/mcp'
         @mcp_docs_url = nil
         @validate_scope_for_user = nil
+        # Refresh-token rotation grace period (seconds). A rotated (revoked)
+        # refresh token replayed WITHIN this window of its rotation is treated as
+        # a benign client race/retry — rejected softly, WITHOUT revoking the
+        # family — because real MCP clients often fire several refreshes at once
+        # when the access token expires. A replay after the window is treated as
+        # genuine reuse/theft and revokes the whole family. Set to 0 to disable
+        # the grace and revoke on any replay.
+        @refresh_token_reuse_grace_period = 10
         # CP-9255 batch 2: JWT signing.
         # Default HS256 keeps existing setups working (shared oauth_secret).
         # Set algorithm to 'RS256' or 'ES256' and provide PEM-encoded keys

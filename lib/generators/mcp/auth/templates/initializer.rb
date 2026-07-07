@@ -40,6 +40,14 @@ Mcp::Auth.configure do |config|
   config.refresh_token_lifetime = 2_592_000     # 30 days
   config.authorization_code_lifetime = 1800     # 30 minutes
 
+  # Refresh-token rotation grace period (seconds). Refresh tokens rotate on every
+  # use and reuse is treated as theft (the whole token family is revoked). Real
+  # MCP clients often fire several refreshes at once when the access token
+  # expires, so a rotated token replayed WITHIN this window is treated as a benign
+  # race (rejected softly, family kept); a replay after it is treated as theft.
+  # Set to 0 to disable the grace and revoke on any replay.
+  config.refresh_token_reuse_grace_period = 10
+
   # ============================================================================
   # USER DATA FETCHER
   # ============================================================================

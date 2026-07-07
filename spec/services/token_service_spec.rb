@@ -34,6 +34,14 @@ RSpec.describe Mcp::Auth::Services::TokenService do
       expect(token_str).to be_a(String)
       # Optionally decode and check payload if needed
     end
+
+    it 'issues distinct tokens for two same-second issuances (unique jti, no storage collision)' do
+      t1 = described_class.generate_access_token(access_token_params, base_url: base_url)
+      t2 = described_class.generate_access_token(access_token_params, base_url: base_url)
+
+      expect(t1).not_to eq(t2)
+      expect(Mcp::Auth::AccessToken.count).to eq(2)
+    end
   end
 
   describe '.generate_access_token sensitive-claim hygiene' do

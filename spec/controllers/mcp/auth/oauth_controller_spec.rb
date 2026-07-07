@@ -440,27 +440,50 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
     end
 
-    it 'detects reuse of an already-rotated token and revokes the whole family (M3)' do
+    it 'detects reuse of an already-rotated token AFTER the grace window and revokes the whole family (M3)' do
       # First redemption rotates `refresh` (marks it revoked) and issues a successor.
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
       }
       successor_raw = JSON.parse(response.body)['refresh_token']
 
-      # Replaying the now-revoked original is reuse: rejected, and the whole family
-      # (including the still-valid successor) is revoked.
+      # Replaying the now-revoked original well after the grace window is theft:
+      # rejected, and the whole family (including the still-valid successor) revoked.
+      travel(1.minute) do
+        post :token, params: {
+          grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+        }
+        expect(response).to have_http_status(:bad_request)
+        expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+
+        # The successor no longer works either.
+        post :token, params: {
+          grant_type: 'refresh_token', refresh_token: successor_raw, client_id: client.client_id
+        }
+        expect(response).to have_http_status(:bad_request)
+        expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil)).to be_empty
+      end
+    end
+
+    it 'tolerates a replay WITHIN the grace window without revoking the family (concurrent-refresh race)' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+      successor_raw = JSON.parse(response.body)['refresh_token']
+
+      # Immediate replay of the just-rotated token (default 10s grace): rejected
+      # softly, but the family is NOT revoked.
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
       }
       expect(response).to have_http_status(:bad_request)
       expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
 
-      # The successor no longer works either.
+      # The successor the client already received still works.
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: successor_raw, client_id: client.client_id
       }
-      expect(response).to have_http_status(:bad_request)
-      expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil)).to be_empty
+      expect(response).to have_http_status(:ok)
     end
 
     it 'does NOT revoke the family when a revoked token is replayed by the wrong client (no unauth DoS)' do
@@ -479,18 +502,21 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil)).not_to be_empty
     end
 
-    it 'revokes the principal\'s access tokens on reuse detection (theft response)' do
+    it 'revokes the principal\'s access tokens on reuse detection after the grace window (theft response)' do
       access = create(:access_token, oauth_client: client, user: refresh.user)
 
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
       }
-      post :token, params: {
-        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
-      }
 
-      expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
-      expect(Mcp::Auth::AccessToken.find_by(id: access.id)).to be_nil
+      travel(1.minute) do
+        post :token, params: {
+          grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+        }
+
+        expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+        expect(Mcp::Auth::AccessToken.find_by(id: access.id)).to be_nil
+      end
     end
   end
 
