@@ -7,6 +7,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-07-03
+
+Second security-hardening round (audit follow-ups), delivered in two phases.
+Phase 1 — code-level fixes, no migration:
+
+### Security (breaking where noted)
+- **Authorization-code TTL was 30 HOURS, not 30 minutes.** The lifetime (a value
+  in seconds, e.g. `1800`) was applied with `.minutes`. Now applied as seconds,
+  and read from the single canonical config source so configured and default
+  deployments agree. **Breaking:** codes now expire in ~30 min as intended.
+- **Issuer / audience / discovery URLs are pinned to the configured origin.**
+  `iss`, `aud`, the canonical resource, and all discovery/JWKS URLs derive from
+  `authorization_server_url` when set, instead of the raw request Host — closing
+  a Host/`X-Forwarded-Host` header-injection vector. **When unset**, the value
+  still falls back to the request origin, so the host app MUST restrict permitted
+  hosts via Rails `config.hosts`.
+- **JWT validation hardened.** Access tokens now carry a `token_use` claim and an
+  id_token can no longer be replayed as an access token; decode enforces
+  `required_claims` (`iss`/`aud`/`sub`/`exp`) with a bounded clock-skew leeway;
+  a missing audience is no longer silently accepted.
+- **Confidential-client auth at the token endpoint.** A `client_secret` presented
+  on a code/refresh request is now verified (constant-time); an invalid secret is
+  rejected. (Full *requirement* of a secret for confidential clients lands with
+  the `token_endpoint_auth_method` column in Phase 2.)
+- **Refresh-token rotation is atomic.** Rotation is gated on a conditional delete,
+  so two concurrent redemptions of one refresh token can no longer each mint a
+  new token family.
+- **Consent enforces least privilege.** A client can no longer be granted a scope
+  it never requested; approved scopes are intersected with the requested set.
+- **`oauth_secret` must be set in production.** The gem no longer silently signs
+  tokens with `Rails.application.secret_key_base` in production (key separation);
+  a missing secret now raises. Dev/test still fall back.
+
+Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
+
+### Security
+- **All persisted secrets are now hashed at rest.** Access-token JWTs, refresh
+  tokens, authorization codes, and client secrets are stored as SHA-256 digests
+  (prefixed `sha256$`); a database leak no longer yields usable credentials. The
+  plaintext client secret is returned exactly once at registration; tokens/codes
+  are returned once to the client and matched by digest thereafter.
+- **Dynamic Client Registration rejects unsupported grant/response types**
+  (RFC 7591 §2) instead of storing arbitrary metadata.
+- **Refresh-token reuse detection** (OAuth 2.1 §4.14.2). Rotation now marks the
+  presented token revoked (grouped by a `family_id`) instead of deleting it, so
+  an authenticated client replaying an already-rotated token is detected as theft
+  and the **entire family is revoked — both the refresh tokens and the access
+  tokens already issued to that principal** (immediate cut-off, not left valid
+  until expiry). Client authentication is checked *before* this reaction, so an
+  unauthenticated replay can't trigger family revocation. Rotation is atomic
+  (only the request that flips `revoked_at` wins), superseding the delete-based
+  race fix. The migration backfills a `family_id` for pre-existing tokens so
+  reuse detection covers them too. A configurable **rotation grace period**
+  (`refresh_token_reuse_grace_period`, default 10s) treats a rotated token
+  replayed moments later as a benign concurrent-refresh race (rejected softly,
+  family kept) rather than theft, so well-behaved MCP clients that fire several
+  refreshes when the access token expires aren't logged out.
+- **Access tokens carry a unique `jti`** (RFC 7519) so two tokens issued in the
+  same second for the same principal/scope don't collide on the unique token
+  index (which previously raised on rapid/concurrent refreshes).
+- **Confidential-client authentication is now enforced.** Clients carry a
+  `token_endpoint_auth_method`; a confidential client (`client_secret_basic` /
+  `client_secret_post`) MUST present a valid secret at the token endpoint, while
+  a public client (`none`, the default) relies on PKCE. **Existing clients
+  default to `none`, so nothing that worked before starts requiring a secret** —
+  a client opts into confidential auth explicitly at registration.
+
+### Fixed
+- Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
+  `…_spec.rb`) that RSpec never ran, restoring ~130 lines of coverage.
+- `mcp_auth:revoke_*` rake tasks now delete across the three tables inside a
+  transaction (no partial revocation on mid-way failure).
+
+### Added
+- **Pending-migration guard.** If the gem is upgraded but its migrations haven't
+  run, mcp-auth now says so instead of failing with a cryptic `unknown attribute`:
+  a clear warning is logged at boot, the OAuth endpoints return an actionable
+  `server_error` ("run a pending migration"), and `rake mcp_auth:doctor` reports
+  schema drift and exits non-zero. Fully guarded — never breaks boot, CI, or
+  `db:*` tasks when the database is absent or unmigrated.
+- **`rails generate mcp:auth:upgrade`** — copies only pending migrations for an
+  existing install (no initializer/view overwrite prompts, unlike re-running the
+  full install generator).
+- **`config.secret_dual_read`** (default `true`) — transitional dual-read: a
+  presented secret/token/code is matched against both its digest and any legacy
+  plaintext row not yet backfilled, so the upgrade is safe under rolling deploys
+  and safe to roll back. Set to `false` once every row is hashed to harden.
+
+### Upgrade
+
+Two migrations: a data backfill that hashes existing secrets **in place** (no
+schema change), and an additive column migration (`token_endpoint_auth_method`
+on clients; `family_id` + `revoked_at` on refresh tokens):
+
+```bash
+bundle update mcp-auth
+rails generate mcp:auth:upgrade   # copies both pending migrations
+rails db:migrate
+```
+
+The backfill hashes the plaintext already present in each column, so **existing
+clients and tokens keep working without re-registration** — the client still
+presents its original value and the gem re-hashes it to match. Existing clients
+get `token_endpoint_auth_method = 'none'` (public), so none of them suddenly
+requires a secret. With `secret_dual_read` on (default) the deploy is safe for
+rolling releases and rollback; once every row is hashed and old code is gone,
+set `config.secret_dual_read = false` to reject plaintext-form matches. The
+hashing backfill is idempotent and irreversible.
+
 ## [0.5.0] - 2026-06-15
 
 Security-hardening release. Closes five OAuth 2.1 / MCP authorization
@@ -196,7 +305,8 @@ keep `HS256` until refresh tokens cycle out.
 - Protected Resource Metadata (RFC 9728)
 - Resource Indicators support (RFC 8707) for token audience binding
 - OpenID Connect Discovery support
-- Automatic middleware for protecting `/mcp/*` routes
+- Opt-in resource-server protection for MCP routes via the
+  `Mcp::Auth::ProtectedResource` concern
 - JWT access tokens with proper audience validation
 - Refresh token rotation for enhanced security
 - Database-backed token storage for revocation support
@@ -215,7 +325,8 @@ keep `HS256` until refresh tokens cycle out.
 - Token audience validation to prevent confused deputy attacks
 - WWW-Authenticate header with resource metadata on 401 responses
 
-[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.2.0...v0.3.0

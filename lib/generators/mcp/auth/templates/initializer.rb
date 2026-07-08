@@ -40,6 +40,14 @@ Mcp::Auth.configure do |config|
   config.refresh_token_lifetime = 2_592_000     # 30 days
   config.authorization_code_lifetime = 1800     # 30 minutes
 
+  # Refresh-token rotation grace period (seconds). Refresh tokens rotate on every
+  # use and reuse is treated as theft (the whole token family is revoked). Real
+  # MCP clients often fire several refreshes at once when the access token
+  # expires, so a rotated token replayed WITHIN this window is treated as a benign
+  # race (rejected softly, family kept); a replay after it is treated as theft.
+  # Set to 0 to disable the grace and revoke on any replay.
+  config.refresh_token_reuse_grace_period = 10
+
   # ============================================================================
   # USER DATA FETCHER
   # ============================================================================
@@ -213,6 +221,21 @@ end
   # Key rotation: list the previous public key(s) here so already-issued tokens
   # keep verifying and both keys are published at /.well-known/jwks.json:
   # config.token_signing_additional_public_keys = [ENV['MCP_JWT_PREVIOUS_PUBLIC_KEY']]
+
+  # ============================================================================
+  # SECRETS HASHED AT REST — TRANSITIONAL DUAL-READ (OPTIONAL)
+  # ============================================================================
+  #
+  # Access tokens, refresh tokens, authorization codes, and client secrets are
+  # stored as one-way SHA-256 digests. While `secret_dual_read` is true (the
+  # default), a presented value is matched against BOTH its digest and any legacy
+  # PLAINTEXT row not yet backfilled — this makes the upgrade safe under rolling
+  # deploys and safe to roll back.
+  #
+  # After you have deployed this version, run `rails db:migrate` (backfills every
+  # row to a digest), and no old app code remains, HARDEN by turning it off so
+  # plaintext-form matches are rejected:
+  # config.secret_dual_read = false
 
 # ============================================================================
 # PROTECTING YOUR MCP ENDPOINT (RESOURCE SERVER)

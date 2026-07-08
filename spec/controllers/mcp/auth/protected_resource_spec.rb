@@ -3,6 +3,23 @@
 require 'rails_helper'
 
 RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
+  describe '.www_authenticate (reusable RFC 9728 challenge for Rack middleware)' do
+    it 'points at the protected-resource metadata with an invalid_token error by default' do
+      header = described_class.www_authenticate('https://example.com')
+
+      expect(header).to start_with('Bearer ')
+      expect(header).to include('error="invalid_token"')
+      expect(header).to include('resource_metadata="https://example.com/.well-known/oauth-protected-resource"')
+    end
+
+    it 'accepts a custom error and description' do
+      header = described_class.www_authenticate('https://e.com', error: 'insufficient_scope', description: 'nope')
+
+      expect(header).to include('error="insufficient_scope"')
+      expect(header).to include('error_description="nope"')
+    end
+  end
+
   let(:user) { create(:user) }
   let(:oauth_client) { create(:oauth_client) }
   let(:token) do
@@ -41,7 +58,7 @@ RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
 
     it 'rejects a revoked token' do
       revoked = token
-      Mcp::Auth::AccessToken.find_by(token: revoked).destroy
+      Mcp::Auth::AccessToken.find_by(token: Mcp::Auth::SecretHashing.digest(revoked)).destroy
       request.headers['Authorization'] = "Bearer #{revoked}"
 
       get :index

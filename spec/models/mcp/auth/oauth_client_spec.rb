@@ -32,6 +32,50 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
     end
   end
 
+  describe 'client_secret hashing at rest (H5)' do
+    let(:client) { described_class.create!(client_name: 'X', redirect_uris: ['https://e.com/cb']) }
+
+    it 'stores a digest, not the plaintext, and exposes the plaintext once' do
+      expect(client.plaintext_secret).to be_present
+      expect(client.client_secret).to start_with('sha256$')
+      expect(client.client_secret).not_to eq(client.plaintext_secret)
+    end
+
+    it 'verifies a correct secret and rejects a wrong one' do
+      expect(client.authenticate_secret(client.plaintext_secret)).to be true
+      expect(client.authenticate_secret('wrong')).to be false
+    end
+
+    it 'authenticates a legacy plaintext secret under dual-read, and rejects it once disabled' do
+      legacy = create(:oauth_client)
+      legacy.update_column(:client_secret, 'legacy-plaintext') # pre-migration row
+
+      expect(legacy.authenticate_secret('legacy-plaintext')).to be true
+
+      allow(Mcp::Auth.configuration).to receive(:secret_dual_read).and_return(false)
+      expect(legacy.authenticate_secret('legacy-plaintext')).to be false
+    end
+  end
+
+  describe 'token_endpoint_auth_method (confidential vs public, H1)' do
+    it 'defaults to none (public / PKCE client)' do
+      client = described_class.create!(client_name: 'X', redirect_uris: ['https://e.com/cb'])
+      expect(client.token_endpoint_auth_method).to eq('none')
+      expect(client).not_to be_confidential
+    end
+
+    it 'is confidential when registered with client_secret_basic' do
+      client = described_class.create!(
+        client_name: 'X', redirect_uris: ['https://e.com/cb'], token_endpoint_auth_method: 'client_secret_basic'
+      )
+      expect(client).to be_confidential
+    end
+
+    it 'rejects an unsupported auth method' do
+      expect(build(:oauth_client, token_endpoint_auth_method: 'private_key_jwt')).not_to be_valid
+    end
+  end
+
   describe 'redirect_uri validation (RFC 7591/8252)' do
     it 'rejects an authorization_code client with no redirect URIs' do
       client = build(:oauth_client, redirect_uris: [])

@@ -116,9 +116,9 @@ module Mcp
         # Remove trailing slash if present
         mcp_path = mcp_path.chomp('/')
 
-        # Build the full resource URL
-        base_url = "#{request.scheme}://#{request.host_with_port}"
-        "#{base_url}#{mcp_path}"
+        # Build the full resource URL from the pinned server origin so a forged
+        # Host header cannot advertise metadata for an attacker-controlled origin.
+        "#{server_origin}#{mcp_path}"
       end
 
       def mcp_documentation_url
@@ -129,8 +129,8 @@ module Mcp
           # If it's a full URL, use as-is
           return docs_url if docs_url.start_with?('http://', 'https://')
 
-          # If it's a path, prepend base URL
-          return "#{request.base_url}#{docs_url}"
+          # If it's a path, prepend the pinned server origin
+          return "#{server_origin}#{docs_url}"
         end
 
         # Default: append /docs to the MCP server path
@@ -138,12 +138,21 @@ module Mcp
         mcp_path = "/#{mcp_path}" unless mcp_path.start_with?('/')
         mcp_path = mcp_path.chomp('/')
 
-        "#{request.base_url}#{mcp_path}/docs"
+        "#{server_origin}#{mcp_path}/docs"
       end
 
       def authorization_server_url
-        config_url = Mcp::Auth.configuration&.authorization_server_url
-        config_url.presence || "#{request.scheme}://#{request.host_with_port}"
+        server_origin
+      end
+
+      # The pinned public origin of this server. Prefer the configured
+      # authorization_server_url so discovery metadata (issuer, every endpoint
+      # URL, jwks_uri) and the canonical resource cannot be poisoned by a forged
+      # Host / X-Forwarded-Host header. Falls back to the request origin ONLY when
+      # unconfigured — the host app MUST then restrict hosts via `config.hosts`.
+      def server_origin
+        configured = Mcp::Auth.configuration&.authorization_server_url
+        configured.presence || "#{request.scheme}://#{request.host_with_port}"
       end
     end
   end

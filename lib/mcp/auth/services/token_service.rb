@@ -4,6 +4,11 @@ module Mcp
   module Auth
     module Services
       class TokenService
+        # Clock-skew tolerance (seconds) applied to exp/nbf verification so a
+        # small difference between the signer's and verifier's clocks doesn't
+        # spuriously reject an otherwise-valid token.
+        CLOCK_SKEW_LEEWAY_SECONDS = 30
+
         class << self
           # Validate access token with optional resource verification (RFC 8707).
           # Supports HS256, RS256, and ES256 — algorithm comes from configuration.
@@ -17,14 +22,26 @@ module Mcp
               # Check expiration manually to ensure proper handling
               return nil if payload['exp'] && (payload['exp'] <= Time.current.to_i)
 
+              # Token-use separation: an id_token is signed with the same key/alg
+              # as an access token, so cryptographically it would otherwise verify
+              # here. Reject anything not minted as an access token. (Legacy tokens
+              # without the claim are still accepted; the DB row check below is the
+              # second gate — id_tokens are never stored.)
+              token_use = payload['token_use']
+              return nil unless token_use.nil? || token_use == 'access'
+
               # Revocation check (RFC 7009): a JWT remains cryptographically valid
               # until it expires, so a stored-and-still-present row is what makes
               # `revoke` actually take effect. Without this, destroyed tokens would
-              # keep validating until natural expiry.
-              return nil unless Mcp::Auth::AccessToken.active.exists?(token: token)
+              # keep validating until natural expiry. The row is keyed by the
+              # token's digest (tokens are hashed at rest).
+              candidates = SecretHashing.lookup_candidates(token)
+              return nil unless Mcp::Auth::AccessToken.active.where(token: candidates).exists?
 
-              # Validate audience if resource provided (RFC 8707 compliance)
-              if resource && payload['aud'].present? && !audience_matches?(payload['aud'], resource)
+              # Validate audience if a resource was provided (RFC 8707). `aud` is a
+              # required claim (enforced at decode), so a token lacking it never
+              # reaches here — no silent skip on a missing audience.
+              if resource && !audience_matches?(payload['aud'], resource)
                 Rails.logger.warn "[TokenService] Token audience mismatch: expected #{resource}, got #{payload['aud']}"
                 return nil
               end
@@ -46,13 +63,28 @@ module Mcp
           def decode_with_known_keys(token)
             last_error = nil
             verification_keys.each do |key|
-              return JWT.decode(token, key, true, { algorithm: signing_algorithm }).first
+              return JWT.decode(token, key, true, decode_options).first
             rescue JWT::DecodeError => e
               last_error = e
             end
             raise last_error if last_error
 
             nil
+          end
+
+          # Decode options shared across verification keys. The algorithm is
+          # pinned to a single value (blocks `alg:none` and RS↔HS confusion);
+          # `exp`/`nbf` are verified with a small clock-skew leeway; and the
+          # core claims are required so a token missing `iss`/`aud`/`sub`/`exp`
+          # is rejected outright rather than silently passing later checks.
+          def decode_options
+            {
+              algorithm: signing_algorithm,
+              verify_expiration: true,
+              verify_not_before: true,
+              leeway: CLOCK_SKEW_LEEWAY_SECONDS,
+              required_claims: %w[iss aud sub exp]
+            }
           end
 
           # Generate JWT access token with proper audience binding
@@ -76,6 +108,15 @@ module Mcp
               client_id: data[:client_id],
               email: user_data[:email],
               scope: data[:scope],
+              # Unique token id (RFC 7519 jti). Guarantees every access token is
+              # distinct even when two are issued in the same second for the same
+              # principal/scope (e.g. rapid or concurrent refreshes) — without it
+              # the JWTs would be byte-identical and collide on the unique token
+              # index at storage time.
+              jti: SecureRandom.uuid,
+              # Marks this JWT as an access token so it can't be replayed as an
+              # id_token (or vice versa); verified in validate_access_token.
+              token_use: 'access',
               # Only a non-sensitive API key *identifier* is embedded. A bearer
               # JWT is decodable by anyone holding it (and is stored at rest), so
               # the matching secret MUST NOT be placed in the token — the resource
@@ -97,7 +138,11 @@ module Mcp
             raise
           end
 
-          # Generate refresh token
+          # Generate refresh token. The opaque value is returned to the client in
+          # plaintext, but only its digest is persisted (hashed at rest). Tokens
+          # descend within a `family_id`: the first issuance starts a new family;
+          # a rotation reuses the presented token's family so a later replay can
+          # be detected as reuse.
           def generate_refresh_token(data)
             refresh_token = SecureRandom.hex(32)
 
@@ -106,11 +151,12 @@ module Mcp
 
             begin
               Mcp::Auth::RefreshToken.create!(
-                token: refresh_token,
+                token: SecretHashing.digest(refresh_token),
                 client_id: data[:client_id],
                 scope: data[:scope],
                 user_id: data[:user_id],
                 org_id: data[:org_id],
+                family_id: data[:family_id].presence || SecureRandom.uuid,
                 expires_at: expires_at
               )
 
@@ -122,12 +168,53 @@ module Mcp
             end
           end
 
+          # Look up the refresh-token record for a presented value in ANY state
+          # (active, expired, or revoked) so the caller can implement reuse
+          # detection. Honors dual-read (digest or legacy plaintext).
+          def find_refresh_token(raw)
+            return nil if raw.blank?
+
+            Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(raw)).first
+          end
+
+          # Atomically consume a refresh token by flipping revoked_at from NULL.
+          # Returns true only for the request that actually performed the flip, so
+          # concurrent redemptions of the same token can't both rotate.
+          def rotate_refresh_token(record)
+            Mcp::Auth::RefreshToken
+              .where(id: record.id, revoked_at: nil)
+              .update_all(revoked_at: Time.current) == 1
+          end
+
+          # Revoke every still-live token in a family (used on reuse detection).
+          def revoke_refresh_family(family_id)
+            return 0 if family_id.blank?
+
+            Mcp::Auth::RefreshToken
+              .where(family_id: family_id, revoked_at: nil)
+              .update_all(revoked_at: Time.current)
+          end
+
+          # Delete the access tokens for a (user, client) pair. Called on
+          # refresh-token-reuse (theft) detection so the already-issued access
+          # token(s) are cut off immediately, not left valid until natural expiry.
+          # Access tokens aren't grouped by family_id, so we scope by the
+          # principal that the compromised family belonged to.
+          def revoke_access_tokens_for(user_id:, client_id:)
+            Mcp::Auth::AccessToken.where(user_id: user_id, client_id: client_id).delete_all
+          end
+
           # Validate refresh token
           def validate_refresh_token(refresh_token)
             return nil if refresh_token.blank?
 
-            token_record = Mcp::Auth::RefreshToken.find_by(token: refresh_token)
+            token_record = Mcp::Auth::RefreshToken.where(token: SecretHashing.lookup_candidates(refresh_token)).first
             return nil unless token_record
+
+            # A rotated/revoked token is no longer active (RFC 7662): rotation now
+            # marks `revoked_at` instead of deleting the row, so introspection must
+            # exclude it explicitly rather than relying on the row being gone.
+            return nil if token_record.revoked?
 
             # Check if token is expired
             return nil if token_record.expires_at < Time.current
@@ -139,18 +226,6 @@ module Mcp
               user_id: token_record.user_id,
               org_id: token_record.org_id
             }
-          end
-
-          # Revoke refresh token (RFC 7009)
-          def revoke_refresh_token(refresh_token)
-            return false if refresh_token.blank?
-
-            token_record = Mcp::Auth::RefreshToken.find_by(token: refresh_token)
-            return false unless token_record
-
-            token_record.destroy
-            Rails.logger.info '[TokenService] Refresh token revoked'
-            true
           end
 
           # Generate complete token response
@@ -192,6 +267,7 @@ module Mcp
               iss: base_url,
               sub: data[:user_id].to_s,
               aud: data[:client_id],
+              token_use: 'id', # distinguishes this from an access token
               iat: Time.current.to_i,
               exp: Time.current.to_i + token_lifetime
             }
@@ -368,9 +444,21 @@ module Mcp
             pub
           end
 
+          # HMAC secret for HS256 signing. A dedicated secret MUST be configured:
+          # silently reusing Rails' secret_key_base (which also signs cookies and
+          # every MessageVerifier) breaks key separation. In production a missing
+          # secret is a hard error; in dev/test we fall back so the gem still boots.
           def oauth_secret
             secret = Mcp::Auth.configuration&.oauth_secret
-            secret.presence || Rails.application.secret_key_base
+            return secret if secret.present?
+
+            if defined?(Rails) && Rails.env.production?
+              raise Mcp::Auth::Error,
+                    'Mcp::Auth.configuration.oauth_secret must be set — refusing to sign tokens with ' \
+                    'Rails.application.secret_key_base in production (key separation).'
+            end
+
+            Rails.application.secret_key_base
           end
 
           def token_lifetime
@@ -421,7 +509,7 @@ module Mcp
             expires_at = data[:expires_at] || token_lifetime.seconds.from_now
 
             Mcp::Auth::AccessToken.create!(
-              token: token,
+              token: SecretHashing.digest(token),
               client_id: data[:client_id],
               resource: audience,
               scope: data[:scope],

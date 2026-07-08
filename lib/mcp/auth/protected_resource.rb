@@ -20,6 +20,21 @@ module Mcp
       extend ActiveSupport::Concern
       include Mcp::Auth::ControllerHelpers
 
+      # Build the RFC 9728 §5.1 / MCP-spec `WWW-Authenticate` header value for a
+      # 401 from a protected MCP resource. Exposed as a plain function (no request
+      # object needed) so it can be used from a Rack middleware guarding /mcp, not
+      # only from this controller concern — a 401 without this header leaves
+      # spec-compliant MCP clients (e.g. MCP Inspector) unable to discover the
+      # protected-resource metadata and refresh/re-authorize.
+      #
+      #   headers['WWW-Authenticate'] =
+      #     Mcp::Auth::ProtectedResource.www_authenticate(request.base_url)
+      def self.www_authenticate(base_url, error: 'invalid_token',
+                                description: 'The access token is missing, invalid, or expired')
+        metadata_url = "#{base_url}/.well-known/oauth-protected-resource"
+        %(Bearer error="#{error}", error_description="#{description}", resource_metadata="#{metadata_url}")
+      end
+
       # Validates the Bearer access token (signature, expiry, revocation status,
       # and — when a resource is configured — the RFC 8707 audience). On success
       # the decoded claims are stashed in request.env for ControllerHelpers and
@@ -66,21 +81,23 @@ module Mcp
         header.split(' ', 2).last.presence
       end
 
-      # Canonical resource identifier for this server (base_url + mcp_server_path),
-      # matching the audience minted into access tokens.
+      # Canonical resource identifier for this server (server origin +
+      # mcp_server_path), matching the audience minted into access tokens. Prefer
+      # the configured authorization_server_url so the audience check is pinned to
+      # a trusted origin rather than a (possibly forged) request Host.
       def mcp_resource_identifier
+        origin = Mcp::Auth.configuration&.authorization_server_url.presence || request.base_url
         path = Mcp::Auth.configuration&.mcp_server_path.presence || '/mcp'
         path = "/#{path}" unless path.start_with?('/')
-        "#{request.base_url}#{path.chomp('/')}"
+        "#{origin}#{path.chomp('/')}"
       end
 
       # RFC 9728 §5.1 / MCP authorization spec: a 401 MUST advertise the
       # protected-resource metadata document via WWW-Authenticate so clients can
       # bootstrap the OAuth flow.
       def render_mcp_unauthorized(error, description, status: :unauthorized)
-        metadata_url = "#{request.base_url}/.well-known/oauth-protected-resource"
         response.headers['WWW-Authenticate'] =
-          %(Bearer error="#{error}", error_description="#{description}", resource_metadata="#{metadata_url}")
+          Mcp::Auth::ProtectedResource.www_authenticate(request.base_url, error: error, description: description)
         render json: { error: error, error_description: description }, status: status
       end
     end
