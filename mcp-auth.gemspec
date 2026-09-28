@@ -24,6 +24,20 @@ Gem::Specification.new do |spec|
     "rubygems_mfa_required" => "true"  # Enable 2FA requirement
   }
 
+  # Shown by Bundler/RubyGems right after this gem installs or upgrades — the
+  # reminder to run migrations (a new version may ship new ones). The gem also
+  # enforces this at runtime (boot warning + `rake mcp_auth:doctor`), so this is
+  # a friendly nudge, not the only safeguard.
+  spec.post_install_message = <<~MESSAGE
+    mcp-auth installed. Run pending migrations before starting your app:
+
+      rails generate mcp:auth:install   # first-time install
+      rails generate mcp:auth:upgrade   # upgrading an existing install
+      rails db:migrate
+
+    Verify the schema any time with: bin/rails mcp_auth:doctor
+  MESSAGE
+
   # Files to include in the gem
   spec.files = Dir.chdir(File.expand_path(__dir__)) do
     Dir[

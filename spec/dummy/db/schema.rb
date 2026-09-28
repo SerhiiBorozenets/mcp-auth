@@ -20,6 +20,7 @@ ActiveRecord::Schema[7.0].define(version: 0) do
     t.string "scope"
     t.string "client_name"
     t.string "client_uri"
+    t.string "token_endpoint_auth_method", default: "none", null: false
     t.timestamps
   end
 
@@ -62,11 +63,14 @@ ActiveRecord::Schema[7.0].define(version: 0) do
     t.string "scope"
     t.integer "user_id", null: false
     t.integer "org_id"
+    t.string "family_id"
+    t.datetime "revoked_at"
     t.datetime "expires_at", null: false
     t.timestamps
 
     t.index ["token"], name: "index_mcp_auth_refresh_tokens_on_token", unique: true
     t.index ["user_id"], name: "index_mcp_auth_refresh_tokens_on_user_id"
     t.index ["org_id"], name: "index_mcp_auth_refresh_tokens_on_org_id"
+    t.index ["family_id"], name: "index_mcp_auth_refresh_tokens_on_family_id"
   end
 end

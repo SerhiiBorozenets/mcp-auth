@@ -62,6 +62,12 @@ RSpec.configure do |config|
     end
   end
 
+  # SchemaGuard memoizes its "schema is current" result per process; clear it
+  # between examples so a stubbed missing-column state in one test doesn't leak.
+  config.before do
+    Mcp::Auth::SchemaGuard.instance_variable_set(:@up_to_date, nil)
+  end
+
   # Time helpers
   config.include ActiveSupport::Testing::TimeHelpers
 end

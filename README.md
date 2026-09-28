@@ -162,12 +162,17 @@ Edit `config/initializers/mcp_auth.rb`:
 
 ```ruby
 Mcp::Auth.configure do |config|
-  # OAuth secret for JWT signing
-  config.oauth_secret = ENV.fetch('MCP_HMAC_SECRET', Rails.application.secret_key_base)
+  # OAuth secret for JWT signing (HS256) — required outside development/test,
+  # and must not be secret_key_base. Generate with `rails secret`.
+  config.oauth_secret = ENV['MCP_HMAC_SECRET']
   
   # Authorization server URL (optional - defaults to same as resource server)
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)
   
+  # Public origin of the MCP resource server (optional - defaults to the request
+  # origin). Pins the token audience and protected-resource metadata URLs.
+  config.mcp_server_url = ENV.fetch('MCP_SERVER_URL', nil)
+
   # MCP Server Path - where your MCP server is mounted
   # Change this if your MCP server is NOT at '/mcp'
   config.mcp_server_path = ENV.fetch('MCP_SERVER_PATH', '/mcp')
@@ -522,6 +527,10 @@ If you want to use a separate authorization server:
 ```ruby
 # config/initializers/mcp_auth.rb
 config.authorization_server_url = 'https://auth.example.com'
+# Public origin of THIS app's MCP endpoint (the token audience). Optional —
+# defaults to the request origin — but set it to pin the audience and metadata
+# URLs against a forged Host header.
+config.mcp_server_url = 'https://api.example.com'
 ```
 
 This is useful for:

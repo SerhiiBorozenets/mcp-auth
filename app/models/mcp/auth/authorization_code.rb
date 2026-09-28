@@ -13,6 +13,10 @@ module Mcp
                  primary_key: :client_id,
                  optional: true
 
+      # Plaintext code, available only in memory (never persisted); the `code`
+      # column stores the digest.
+      attr_accessor :plaintext_code
+
       validates :code, presence: true, uniqueness: true
       validates :client_id, presence: true
       validates :redirect_uri, presence: true

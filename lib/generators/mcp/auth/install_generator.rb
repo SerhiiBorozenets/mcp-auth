@@ -29,6 +29,17 @@ module Mcp
           migration_template "create_refresh_tokens.rb.erb",
                              "db/migrate/create_mcp_auth_refresh_tokens.rb",
                              migration_version: migration_version
+
+          # Hashes secrets at rest. On a fresh install this runs against empty
+          # tables (a no-op); on an upgrade it backfills existing plaintext.
+          migration_template "hash_mcp_auth_secrets_at_rest.rb.erb",
+                             "db/migrate/hash_mcp_auth_secrets_at_rest.rb",
+                             migration_version: migration_version
+
+          # Confidential-client auth method + refresh-token reuse-detection columns.
+          migration_template "add_mcp_auth_confidential_client_and_reuse.rb.erb",
+                             "db/migrate/add_mcp_auth_confidential_client_and_reuse.rb",
+                             migration_version: migration_version
         end
 
         def copy_initializer
