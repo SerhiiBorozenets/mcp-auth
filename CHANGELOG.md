@@ -96,7 +96,25 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   even when written with `://` (e.g. `javascript://%0aalert(1)`), which the
   native-app-scheme check previously let through.
 
+- **The per-user scope policy is enforced at approval.** `validate_scope_for_user`
+  only filtered what the consent screen showed; a user could POST a hidden scope
+  name to `/oauth/approve` and have it granted, and required scopes were re-added
+  even when the policy denied them. The policy now filters the granted set.
+- **OAuth credentials are filtered from logs.** The engine adds `code`,
+  `code_verifier`, `client_secret`, `refresh_token`, `access_token`, `id_token`
+  and `token` to `filter_parameters` (Rails' defaults miss `code` and
+  `code_verifier`), and filters redirects carrying `?code=`.
+- **Token responses are not cacheable** (RFC 6749 §5.1): `Cache-Control: no-store`
+  and `Pragma: no-cache` on token, register, introspect and userinfo.
+- **The consent page can't be framed or read cross-origin.** `X-Frame-Options:
+  DENY` and `frame-ancestors 'none'` on authorize/approve, and CORS headers are no
+  longer sent there (RFC 9700 §2.6); the other endpoints keep CORS.
+
 ### Fixed
+- The generated initializer closed the `Mcp::Auth.configure` block before the
+  JWT-signing and `secret_dual_read` sections, so uncommenting
+  `config.secret_dual_read = false` (as the upgrade generator instructs) raised
+  `NameError` at boot.
 - The secrets-hashing backfill migration processes rows in batches of 1000
   (keyset-paginated by primary key) instead of loading each table into memory.
 - Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
