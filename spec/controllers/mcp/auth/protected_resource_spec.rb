@@ -56,6 +56,16 @@ RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
       expect(JSON.parse(response.body)['error']).to eq('invalid_token')
     end
 
+    it 'advertises metadata on the configured origin, not a forged Host header' do
+      allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+      request.host = 'evil.example.com'
+
+      get :index
+
+      expect(response.headers['WWW-Authenticate'])
+        .to include('resource_metadata="https://auth.example.com/.well-known/oauth-protected-resource"')
+    end
+
     it 'rejects a revoked token' do
       revoked = token
       Mcp::Auth::AccessToken.find_by(token: Mcp::Auth::SecretHashing.digest(revoked)).destroy

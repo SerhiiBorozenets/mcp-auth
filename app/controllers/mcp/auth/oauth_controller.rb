@@ -405,20 +405,43 @@ module Mcp
       # NULL wins the race); the successor is issued in the SAME family so a future
       # replay of this token is detectable as reuse. A client may narrow scope
       # (RFC 6749 §6) but never widen it.
+      #
+      # Rotation and issuance share ONE transaction: if minting the successor
+      # fails (or yields no refresh token), the revocation rolls back and the
+      # client can retry with the token it holds, instead of being left with no
+      # valid refresh token at all (a forced logout).
       def rotate_and_issue_from_refresh(record)
         scope = record.scope
         scope = narrow_scope(scope, params[:scope]) if params[:scope].present?
-
-        unless Services::TokenService.rotate_refresh_token(record)
-          return render_error('invalid_grant', 'Refresh token is invalid or expired')
-        end
 
         token_data = {
           client_id: record.client_id, scope: scope, user_id: record.user_id,
           org_id: record.org_id, family_id: record.family_id, resource: params[:resource]
         }
-        token_response = Services::TokenService.generate_token_response(token_data, base_url: server_origin)
-        render json: token_response, content_type: 'application/json'
+
+        outcome = nil
+        token_response = nil
+        Mcp::Auth::RefreshToken.transaction do
+          unless Services::TokenService.rotate_refresh_token(record)
+            outcome = :lost_race
+            raise ActiveRecord::Rollback
+          end
+
+          token_response = Services::TokenService.generate_token_response(token_data, base_url: server_origin)
+          next if token_response[:refresh_token].present?
+
+          outcome = :no_successor
+          raise ActiveRecord::Rollback
+        end
+
+        case outcome
+        when :lost_race
+          render_error('invalid_grant', 'Refresh token is invalid or expired')
+        when :no_successor
+          render_error('server_error', 'Failed to issue tokens', status: :internal_server_error)
+        else
+          render json: token_response, content_type: 'application/json'
+        end
       end
 
       # Intersection of the originally granted scope and a requested subset.

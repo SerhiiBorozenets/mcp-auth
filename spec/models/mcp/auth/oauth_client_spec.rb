@@ -88,6 +88,12 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
       expect(client).not_to be_valid
     end
 
+    it 'rejects script/local schemes even when written with ://' do
+      %w[javascript://%0aalert(1) JavaScript://x data://text/html,x file:///etc/passwd vbscript://x].each do |uri|
+        expect(build(:oauth_client, redirect_uris: [uri])).not_to be_valid, "expected #{uri} to be rejected"
+      end
+    end
+
     it 'accepts an https redirect URI' do
       client = build(:oauth_client, redirect_uris: ['https://app.example.com/cb'])
       expect(client).to be_valid

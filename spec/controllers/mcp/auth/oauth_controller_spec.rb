@@ -386,6 +386,28 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(successor).to be_present
     end
 
+    it 'rolls back the rotation when minting the successor raises (no forced logout)' do
+      allow(Mcp::Auth::Services::TokenService).to receive(:generate_token_response).and_raise(StandardError, 'boom')
+
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+
+      expect(response).to have_http_status(:internal_server_error)
+      expect(refresh.reload.revoked_at).to be_nil # still usable for a retry
+    end
+
+    it 'rolls back the rotation when no successor refresh token could be issued' do
+      allow(Mcp::Auth::Services::TokenService).to receive(:generate_refresh_token).and_return(nil)
+
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+
+      expect(response).to have_http_status(:internal_server_error)
+      expect(refresh.reload.revoked_at).to be_nil
+    end
+
     it 'rejects redemption by a client other than the one it was issued to (OAuth 2.1 §4.3.1)' do
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: other_client.client_id

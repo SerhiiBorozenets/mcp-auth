@@ -26,6 +26,11 @@ module Mcp
       PUBLIC_AUTH_METHOD = 'none'
       TOKEN_ENDPOINT_AUTH_METHODS = [PUBLIC_AUTH_METHOD, 'client_secret_basic', 'client_secret_post'].freeze
 
+      # Schemes that must never receive an authorization code: they execute
+      # script or read local content rather than reaching a client
+      # (e.g. `javascript://%0aalert(1)` would otherwise pass the `://` check).
+      FORBIDDEN_REDIRECT_SCHEMES = %w[javascript data vbscript file about blob].freeze
+
       validates :client_id, presence: true, uniqueness: true
       validates :client_secret, presence: true
       validates :token_endpoint_auth_method, inclusion: { in: TOKEN_ENDPOINT_AUTH_METHODS }
@@ -133,6 +138,7 @@ module Mcp
 
       def valid_redirect_uri_format?(uri)
         parsed = URI.parse(uri.to_s)
+        return false if FORBIDDEN_REDIRECT_SCHEMES.include?(parsed.scheme.to_s.downcase)
         return true if parsed.is_a?(URI::HTTP) && parsed.host.present? # http(s) with host
         return true if parsed.scheme.present? && uri.to_s.include?('://') # native app scheme
 

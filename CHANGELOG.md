@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [0.6.0] - 2026-07-03
+## [0.6.0] - 2026-09-28
 
 Second security-hardening round (audit follow-ups), delivered in two phases.
 Phase 1 — code-level fixes, no migration:
@@ -74,13 +74,32 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   default to `none`, so nothing that worked before starts requiring a secret** —
   a client opts into confidential auth explicitly at registration.
 
+- **Refresh rotation and successor issuance are one transaction.** If minting
+  the new tokens fails (or yields no refresh token), the rotation rolls back and
+  the client can retry with the token it holds, instead of being left with no
+  valid refresh token (a forced logout).
+- **`WWW-Authenticate` on a protected-resource 401 uses the pinned origin.** The
+  `resource_metadata` URL now derives from `authorization_server_url` when set,
+  so a forged Host header can't steer clients to attacker-controlled metadata.
+- **Dangerous redirect-URI schemes are rejected at registration.**
+  `javascript:`, `data:`, `vbscript:`, `file:`, `about:` and `blob:` are refused
+  even when written with `://` (e.g. `javascript://%0aalert(1)`), which the
+  native-app-scheme check previously let through.
+
 ### Fixed
+- The secrets-hashing backfill migration processes rows in batches of 1000
+  (keyset-paginated by primary key) instead of loading each table into memory.
 - Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
   `…_spec.rb`) that RSpec never ran, restoring ~130 lines of coverage.
 - `mcp_auth:revoke_*` rake tasks now delete across the three tables inside a
   transaction (no partial revocation on mid-way failure).
 
 ### Added
+- **`Mcp::Auth::ProtectedResource.www_authenticate(base_url, error:, description:)`**
+  — the RFC 9728 `WWW-Authenticate` challenge as a plain function, so a Rack
+  middleware guarding `/mcp` can emit the same header the controller concern
+  does (without it, spec-compliant MCP clients can't discover the metadata and
+  re-authorize).
 - **Pending-migration guard.** If the gem is upgraded but its migrations haven't
   run, mcp-auth now says so instead of failing with a cryptic `unknown attribute`:
   a clear warning is logged at boot, the OAuth endpoints return an actionable
