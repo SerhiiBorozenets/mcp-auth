@@ -28,8 +28,8 @@ Phase 1 — code-level fixes, no migration:
 - **JWT validation hardened.** Access tokens now carry a `token_use` claim and an
   id_token can no longer be replayed as an access token; decode enforces
   `required_claims` (`iss`/`aud`/`sub`/`exp`, also checked explicitly so older
-  ruby-jwt versions that ignore that option are covered) with a bounded
-  clock-skew leeway;
+  ruby-jwt versions that ignore that option are covered); `exp` is strict and
+  `nbf` allows a bounded clock-skew leeway;
   a missing audience is no longer silently accepted.
 - **Confidential-client auth at the token endpoint.** A `client_secret` presented
   on a code/refresh request is now verified (constant-time); an invalid secret is
@@ -138,9 +138,10 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   `server_error` ("run a pending migration"), and `rake mcp_auth:doctor` reports
   schema drift and exits non-zero. Fully guarded — never breaks boot, CI, or
   `db:*` tasks when the database is absent or unmigrated.
-- **`rails generate mcp:auth:upgrade`** — copies only pending migrations for an
-  existing install (no initializer/view overwrite prompts, unlike re-running the
-  full install generator).
+- **`rails generate mcp:auth:upgrade`** — copies the pending schema migration for
+  an existing install (no initializer/view overwrite prompts, unlike re-running
+  the full install generator); **`rails generate mcp:auth:hash_secrets`** copies
+  the secrets-hashing backfill, run once every server is upgraded.
 - **`config.secret_dual_read`** (default `true`) — transitional dual-read: a
   presented secret/token/code is matched against both its digest and any legacy
   plaintext row not yet backfilled, so 0.6.0 keeps working before and during
@@ -149,9 +150,16 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
 
 ### Upgrade
 
-Two migrations: a data backfill that hashes existing secrets **in place** (no
-schema change), and an additive column migration (`token_endpoint_auth_method`
-on clients; `family_id` + `revoked_at` on refresh tokens):
+Two migrations, applied in **two separate steps** so no server ever sees a
+schema or data format it can't handle:
+
+- `add_mcp_auth_confidential_client_and_reuse`: **additive columns**
+  (`token_endpoint_auth_method` on clients; `family_id` + `revoked_at` on refresh
+  tokens). 0.5.0 ignores them; 0.6.0 **requires** them (its OAuth endpoints
+  return a 500 with a "run a pending migration" message until they exist).
+- `hash_mcp_auth_secrets_at_rest`: a **data backfill** that hashes existing
+  secrets in place. 0.6.0 reads both forms (`secret_dual_read`); **0.5.0 cannot
+  read hashed rows**.
 
 **Before deploying (HS256 users):** set a dedicated `MCP_HMAC_SECRET` (`rails
 secret`). Outside development/test, token signing now fails if `oauth_secret` is
@@ -162,28 +170,31 @@ fall back to. Change that line to `config.oauth_secret = ENV['MCP_HMAC_SECRET']`
 secret invalidates outstanding access tokens (clients refresh); refresh tokens
 are unaffected.
 
-**Order matters — deploy first, then migrate:**
-
 ```bash
 bundle update mcp-auth
-rails generate mcp:auth:upgrade   # copies both pending migrations
-# 1. deploy 0.6.0 to EVERY server
-# 2. then:
+
+# Step 1 — schema. Run BEFORE the new code serves traffic (e.g. release phase).
+rails generate mcp:auth:upgrade
 rails db:migrate
+# ...deploy 0.6.0 to every server...
 bin/rails mcp_auth:doctor          # schema + signing-secret check
+
+# Step 2 — once NO server runs <= 0.5.0 (a later deploy is fine):
+rails generate mcp:auth:hash_secrets
+rails db:migrate
+# then: config.secret_dual_read = false
 ```
 
 The backfill hashes the plaintext already present in each column, so **existing
 clients and tokens keep working without re-registration** — the client still
 presents its original value and the gem re-hashes it to match. Existing clients
 get `token_endpoint_auth_method = 'none'` (public), so none of them suddenly
-requires a secret. With `secret_dual_read` on (default), 0.6.0 servers accept
-both hashed and not-yet-hashed rows, so they keep working before and during the
-backfill. **Versions ≤ 0.5.0 cannot read hashed rows:** a server still on 0.5.0
-when the migration runs rejects every token, and rolling back after the
-migration signs every client out. Once every row is hashed, set
-`config.secret_dual_read = false` to reject plaintext-form matches. The hashing
-backfill is idempotent and irreversible.
+requires a secret.
+
+**During the step-1 rollout** (both versions serving), tokens and codes *issued
+by* 0.6.0 servers are stored hashed, so a 0.5.0 server can't validate them until
+it is replaced; keep that window short. After step 2, rolling back to ≤ 0.5.0
+signs every client out. The hashing backfill is idempotent and irreversible.
 
 ## [0.5.0] - 2026-06-15
 

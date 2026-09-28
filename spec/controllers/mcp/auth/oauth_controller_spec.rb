@@ -381,6 +381,23 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(JSON.parse(response.body)['access_token']).to be_present
     end
 
+    it 'binds a blank resource to the MCP resource, not the separate authorization server' do
+      allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+      blank_resource_code = Mcp::Auth::Services::AuthorizationService.generate_authorization_code(
+        { client_id: client.client_id, redirect_uri: redirect_uri, code_challenge: challenge,
+          code_challenge_method: 'S256', scope: 'mcp:read', resource: '' },
+        user: user, org: nil
+      )
+
+      post :token, params: {
+        grant_type: 'authorization_code', code: blank_resource_code, code_verifier: verifier,
+        redirect_uri: redirect_uri, client_id: client.client_id, resource: ''
+      }
+
+      aud = JWT.decode(JSON.parse(response.body)['access_token'], nil, false).first['aud']
+      expect(aud).to eq('http://test.host/mcp')
+    end
+
     it 'rejects when the requesting client_id does not match the code (RFC 6749 §4.1.3)' do
       post :token, params: {
         grant_type: 'authorization_code', code: code, code_verifier: verifier,

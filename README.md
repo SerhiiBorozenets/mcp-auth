@@ -135,6 +135,11 @@ rails generate mcp:auth:install
 rails db:migrate
 ```
 
+**Upgrading an existing install?** Don't re-run the install generator. Use
+`rails generate mcp:auth:upgrade` (schema, before deploying) and, once every
+server runs the new version, `rails generate mcp:auth:hash_secrets`. See the
+0.6.0 "Upgrade" section in [CHANGELOG.md](CHANGELOG.md) for the exact order.
+
 ## Quick Start
 
 ### 1. Mount Routes

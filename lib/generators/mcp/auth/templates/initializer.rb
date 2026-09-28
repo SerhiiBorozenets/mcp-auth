@@ -240,9 +240,11 @@ Mcp::Auth.configure do |config|
   # PLAINTEXT row not yet backfilled, so this version keeps working before and
   # while the backfill migration runs.
   #
-  # Upgrade order: deploy this version to EVERY server first, then run
-  # `rails db:migrate`. Older versions (<= 0.5.0) cannot read hashed rows, so
-  # rolling back after the backfill signs every client out.
+  # Upgrading an existing install: `rails g mcp:auth:upgrade && rails db:migrate`
+  # (additive columns) before deploying; once EVERY server runs this version,
+  # `rails g mcp:auth:hash_secrets && rails db:migrate` hashes existing rows.
+  # Older versions (<= 0.5.0) cannot read hashed rows, so rolling back after that
+  # backfill signs every client out.
   #
   # Once every row is hashed, HARDEN by turning it off so plaintext-form matches
   # are rejected:

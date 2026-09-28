@@ -35,6 +35,9 @@ Gem::Specification.new do |spec|
       rails generate mcp:auth:upgrade   # upgrading an existing install
       rails db:migrate
 
+    Upgrading from <= 0.5.0? Read the 0.6.0 CHANGELOG "Upgrade" section first:
+    secrets are hashed in a separate, later step (mcp:auth:hash_secrets).
+
     Verify the schema any time with: bin/rails mcp_auth:doctor
   MESSAGE
 

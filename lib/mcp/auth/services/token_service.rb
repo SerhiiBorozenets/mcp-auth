@@ -4,9 +4,9 @@ module Mcp
   module Auth
     module Services
       class TokenService
-        # Clock-skew tolerance (seconds) applied to exp/nbf verification so a
-        # small difference between the signer's and verifier's clocks doesn't
-        # spuriously reject an otherwise-valid token.
+        # Clock-skew tolerance (seconds) for `nbf` only, so a token minted by a
+        # server whose clock runs slightly ahead isn't rejected as "not yet
+        # valid". Expiry is deliberately strict — see validate_access_token.
         CLOCK_SKEW_LEEWAY_SECONDS = 30
 
         # Claims every access token must carry.
@@ -28,7 +28,8 @@ module Mcp
               # audience check below on those versions.
               return nil unless REQUIRED_CLAIMS.all? { |claim| payload[claim].present? }
 
-              # Check expiration manually to ensure proper handling
+              # Expiry is strict (no leeway): this server validates tokens it
+              # issued itself, so there's no cross-machine skew to absorb.
               return nil if payload['exp'] && (payload['exp'] <= Time.current.to_i)
 
               # Token-use separation: an id_token is signed with the same key/alg
@@ -83,7 +84,8 @@ module Mcp
 
           # Decode options shared across verification keys. The algorithm is
           # pinned to a single value (blocks `alg:none` and RS↔HS confusion);
-          # `exp`/`nbf` are verified with a small clock-skew leeway; and the
+          # `exp` is verified strictly and `nbf` with a small clock-skew leeway;
+          # and the
           # core claims are required so a token missing `iss`/`aud`/`sub`/`exp`
           # is rejected outright rather than silently passing later checks.
           def decode_options
@@ -91,7 +93,8 @@ module Mcp
               algorithm: signing_algorithm,
               verify_expiration: true,
               verify_not_before: true,
-              leeway: CLOCK_SKEW_LEEWAY_SECONDS,
+              exp_leeway: 0,
+              nbf_leeway: CLOCK_SKEW_LEEWAY_SECONDS,
               required_claims: REQUIRED_CLAIMS
             }
           end

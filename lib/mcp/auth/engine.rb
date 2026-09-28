@@ -31,8 +31,16 @@ module Mcp
       # (:token, :secret, ...) miss the authorization `code` and the PKCE
       # `code_verifier`, which together are enough to redeem a code; the
       # redirect back to the client (`Redirected to ...?code=...`) is filtered too.
+      # Anchored regexes, not symbols: Rails matches symbols as SUBSTRINGS across
+      # the whole app (and ActiveRecord filter_attributes), so `:code` would also
+      # mask `postal_code`, `promo_code`, ...
+      OAUTH_FILTER_PARAMETERS = [
+        /\Acode\z/, /\Acode_verifier\z/, /\Aclient_secret\z/, /\Arefresh_token\z/,
+        /\Aaccess_token\z/, /\Aid_token\z/, /\Atoken\z/
+      ].freeze
+
       initializer 'mcp_auth.filter_parameters' do |app|
-        app.config.filter_parameters |= %i[code code_verifier client_secret refresh_token access_token id_token token]
+        app.config.filter_parameters |= OAUTH_FILTER_PARAMETERS
         app.config.filter_redirect << /[?&]code=/
       end
 

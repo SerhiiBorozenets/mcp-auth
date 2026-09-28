@@ -354,7 +354,11 @@ module Mcp
           return render_error('invalid_grant', 'Authorization code is invalid or expired')
         end
 
-        token_data = code_data.merge(resource: code_data[:resource] || params[:resource] || canonical_resource_identifier)
+        # `.presence` throughout: a blank `resource` (e.g. `resource=`) must fall
+        # back to this server's canonical resource, not to an empty audience.
+        token_data = code_data.merge(
+          resource: code_data[:resource].presence || params[:resource].presence || canonical_resource_identifier
+        )
         token_response = Services::TokenService.generate_token_response(token_data, base_url: server_origin)
 
         render json: token_response, content_type: 'application/json'
