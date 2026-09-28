@@ -43,7 +43,8 @@ module Mcp
                     :token_signing_additional_public_keys,
                     :token_signing_kid,
                     :secret_dual_read,
-                    :refresh_token_reuse_grace_period
+                    :refresh_token_reuse_grace_period,
+                    :mcp_server_url
 
       # token_signing_algorithm has a validating writer defined below, so only
       # the reader is generated here.
@@ -61,6 +62,12 @@ module Mcp
         @consent_view_path = 'mcp/auth/consent'
         @use_custom_consent_view = false
         @mcp_server_path = '/mcp'
+        # Public origin of the MCP resource server (e.g. 'https://api.example.com').
+        # The token audience, protected-resource metadata and 401 challenge are
+        # built from it. Optional: defaults to the request origin. Set it to pin
+        # these against a forged Host header, and whenever authorization_server_url
+        # points at a different host.
+        @mcp_server_url = nil
         @mcp_docs_url = nil
         @validate_scope_for_user = nil
         # Refresh-token rotation grace period (seconds). A rotated (revoked)

@@ -56,14 +56,23 @@ RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
       expect(JSON.parse(response.body)['error']).to eq('invalid_token')
     end
 
-    it 'advertises metadata on the configured origin, not a forged Host header' do
-      allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+    it 'advertises metadata on the configured MCP origin, not a forged Host header' do
+      allow(Mcp::Auth.configuration).to receive(:mcp_server_url).and_return('https://api.example.com')
       request.host = 'evil.example.com'
 
       get :index
 
       expect(response.headers['WWW-Authenticate'])
-        .to include('resource_metadata="https://auth.example.com/.well-known/oauth-protected-resource"')
+        .to include('resource_metadata="https://api.example.com/.well-known/oauth-protected-resource"')
+    end
+
+    it 'accepts a valid token when a separate authorization server is configured' do
+      allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+      request.headers['Authorization'] = "Bearer #{token}"
+
+      get :index
+
+      expect(response).to have_http_status(:ok)
     end
 
     it 'rejects a revoked token' do

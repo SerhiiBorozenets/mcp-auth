@@ -213,6 +213,35 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(Mcp::Auth::AuthorizationCode.last.scope.split).to contain_exactly('mcp:read')
     end
 
+    it 'keeps the server-required scopes even when the client did not request them' do
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      post :approve, params: base_params.merge(approved: 'true', scope: 'mcp:write', scopes: %w[mcp:read mcp:write])
+
+      expect(response).to have_http_status(:redirect)
+      expect(Mcp::Auth::AuthorizationCode.last.scope.split).to contain_exactly('mcp:read', 'mcp:write')
+    end
+
+    context 'when the user unticks every requested scope' do
+      before do
+        Mcp::Auth::ScopeRegistry.clear_scopes!
+        Mcp::Auth::ScopeRegistry.register_scope('mcp:write', name: 'Write', description: 'w')
+        Mcp::Auth::ScopeRegistry.register_scope('mcp:analytics', name: 'Analytics', description: 'a')
+      end
+
+      after { Mcp::Auth::ScopeRegistry.clear_scopes! }
+
+      it 'refuses instead of falling back to the originally requested scopes' do
+        allow(controller).to receive(:mcp_current_user).and_return(user)
+
+        post :approve, params: base_params.merge(approved: 'true', scope: 'mcp:write', scopes: %w[mcp:analytics])
+
+        expect(response).to have_http_status(:redirect)
+        expect(response.location).to include('error=invalid_scope')
+        expect(Mcp::Auth::AuthorizationCode.count).to eq(0)
+      end
+    end
+
     it 'rejects a non-S256 (plain) code_challenge_method (PKCE downgrade)' do
       get :authorize, params: base_params.merge(code_challenge: 'abc', code_challenge_method: 'plain')
 

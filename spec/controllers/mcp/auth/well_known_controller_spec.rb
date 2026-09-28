@@ -33,16 +33,27 @@ RSpec.describe Mcp::Auth::WellKnownController, type: :controller do
       expect(response.headers['Access-Control-Allow-Methods']).to eq('GET, OPTIONS')
     end
 
-    it 'pins the resource/issuer to the configured origin, ignoring a forged Host header' do
+    it 'pins the resource/issuer to the configured origins, ignoring a forged Host header' do
       allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+      allow(Mcp::Auth.configuration).to receive(:mcp_server_url).and_return('https://api.example.com')
       request.host = 'evil.attacker.example'
 
       get :protected_resource
 
       json = JSON.parse(response.body)
-      expect(json['resource']).to eq('https://auth.example.com/mcp')
+      expect(json['resource']).to eq('https://api.example.com/mcp')
       expect(json['authorization_servers']).to eq(['https://auth.example.com'])
       expect(response.body).not_to include('evil.attacker.example')
+    end
+
+    it 'keeps the resource on this host when only a SEPARATE authorization server is configured' do
+      allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+
+      get :protected_resource
+
+      json = JSON.parse(response.body)
+      expect(json['resource']).to eq('http://test.host/mcp')
+      expect(json['authorization_servers']).to eq(['https://auth.example.com'])
     end
   end
 

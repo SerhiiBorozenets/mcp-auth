@@ -18,14 +18,18 @@ Phase 1 — code-level fixes, no migration:
   and read from the single canonical config source so configured and default
   deployments agree. **Breaking:** codes now expire in ~30 min as intended.
 - **Issuer / audience / discovery URLs are pinned to the configured origin.**
-  `iss`, `aud`, the canonical resource, and all discovery/JWKS URLs derive from
-  `authorization_server_url` when set, instead of the raw request Host — closing
-  a Host/`X-Forwarded-Host` header-injection vector. **When unset**, the value
-  still falls back to the request origin, so the host app MUST restrict permitted
-  hosts via Rails `config.hosts`.
+  `iss` and all discovery/JWKS URLs derive from `authorization_server_url`, and
+  the MCP resource (token `aud`, protected-resource metadata, 401 challenge)
+  from the new `mcp_server_url`, instead of the raw request Host — closing a
+  Host/`X-Forwarded-Host` header-injection vector. The two are separate so a
+  deployment with a distinct authorization server keeps its resource on the MCP
+  host. **When unset**, each falls back to the request origin, so the host app
+  MUST restrict permitted hosts via Rails `config.hosts`.
 - **JWT validation hardened.** Access tokens now carry a `token_use` claim and an
   id_token can no longer be replayed as an access token; decode enforces
-  `required_claims` (`iss`/`aud`/`sub`/`exp`) with a bounded clock-skew leeway;
+  `required_claims` (`iss`/`aud`/`sub`/`exp`, also checked explicitly so older
+  ruby-jwt versions that ignore that option are covered) with a bounded
+  clock-skew leeway;
   a missing audience is no longer silently accepted.
 - **Confidential-client auth at the token endpoint.** A `client_secret` presented
   on a code/refresh request is now verified (constant-time); an invalid secret is
@@ -35,7 +39,10 @@ Phase 1 — code-level fixes, no migration:
   so two concurrent redemptions of one refresh token can no longer each mint a
   new token family.
 - **Consent enforces least privilege.** A client can no longer be granted a scope
-  it never requested; approved scopes are intersected with the requested set.
+  it never requested; approved scopes are intersected with the requested set
+  (plus the server's registered required scopes). If nothing the user approved
+  was requested, the flow ends with `invalid_scope` instead of falling back to
+  the original request.
 - **`oauth_secret` must be set in production.** The gem no longer silently signs
   tokens with `Rails.application.secret_key_base` in production (key separation);
   a missing secret now raises. Dev/test still fall back.
@@ -78,9 +85,9 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   the new tokens fails (or yields no refresh token), the rotation rolls back and
   the client can retry with the token it holds, instead of being left with no
   valid refresh token (a forced logout).
-- **`WWW-Authenticate` on a protected-resource 401 uses the pinned origin.** The
-  `resource_metadata` URL now derives from `authorization_server_url` when set,
-  so a forged Host header can't steer clients to attacker-controlled metadata.
+- **`WWW-Authenticate` on a protected-resource 401 can be pinned.** The
+  `resource_metadata` URL derives from `mcp_server_url` when set, so a forged
+  Host header can't steer clients to attacker-controlled metadata.
 - **Dangerous redirect-URI schemes are rejected at registration.**
   `javascript:`, `data:`, `vbscript:`, `file:`, `about:` and `blob:` are refused
   even when written with `://` (e.g. `javascript://%0aalert(1)`), which the
@@ -95,6 +102,10 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   transaction (no partial revocation on mid-way failure).
 
 ### Added
+- **`config.mcp_server_url`** — public origin of the MCP resource server. Pins the
+  token audience, protected-resource metadata, and 401 `resource_metadata` URL.
+  Optional (defaults to the request origin); set it whenever
+  `authorization_server_url` points at a different host.
 - **`Mcp::Auth::ProtectedResource.www_authenticate(base_url, error:, description:)`**
   — the RFC 9728 `WWW-Authenticate` challenge as a plain function, so a Rack
   middleware guarding `/mcp` can emit the same header the controller concern

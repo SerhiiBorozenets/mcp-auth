@@ -57,11 +57,13 @@ module Mcp
           approved_scopes = Mcp::Auth::ScopeRegistry.validate_scopes(selected_scopes)
 
           # Least privilege: a client must never RECEIVE a scope it did not
-          # REQUEST. `validate_scopes` re-adds all registered "required" scopes and
-          # the consent screen can surface scopes beyond the request, so intersect
-          # the result with the originally-requested set before issuing the code.
-          # (When the client requested nothing, fall back to the validated set.)
-          approved_scopes &= requested_scopes if requested_scopes.any?
+          # REQUEST. The consent screen can surface scopes beyond the request, so
+          # intersect with the requested set — plus the server's registered
+          # REQUIRED scopes, which every token needs to be usable at all. (When the
+          # client requested nothing, keep the validated set.)
+          if requested_scopes.any?
+            approved_scopes &= (requested_scopes | Mcp::Auth::ScopeRegistry.validate_scopes([]))
+          end
 
           # Preserve standard OpenID Connect scopes that were originally requested.
           # They gate identity claims (already governed by the userinfo/id_token
@@ -69,6 +71,13 @@ module Mcp
           # as individual consent checkboxes but must survive the approval step.
           oidc_scopes = requested_scopes & Mcp::Auth::ScopeRegistry::STANDARD_OIDC_SCOPES
           approved_scope_string = (approved_scopes + oidc_scopes).uniq.join(' ')
+
+          # Nothing the user approved survives the filter. Refuse rather than let
+          # generate_and_redirect_with_code fall back to the ORIGINAL request —
+          # that would issue exactly the scopes the user just unticked.
+          if approved_scope_string.blank?
+            return redirect_with_error('invalid_scope', 'None of the approved scopes were requested')
+          end
 
           # Generate authorization code with ONLY approved scopes
           generate_and_redirect_with_code(approved_scope_string)
@@ -196,7 +205,7 @@ module Mcp
       def canonical_resource_identifier
         path = Mcp::Auth.configuration&.mcp_server_path.presence || '/mcp'
         path = "/#{path}" unless path.start_with?('/')
-        "#{server_origin}#{path.chomp('/')}"
+        "#{resource_origin}#{path.chomp('/')}"
       end
 
       # OAuth 2.1 / RFC 6749 §3.1.2.3: the authorization endpoint MUST reject any
@@ -332,7 +341,7 @@ module Mcp
           return render_error('invalid_grant', 'Authorization code is invalid or expired')
         end
 
-        token_data = code_data.merge(resource: code_data[:resource] || params[:resource])
+        token_data = code_data.merge(resource: code_data[:resource] || params[:resource] || canonical_resource_identifier)
         token_response = Services::TokenService.generate_token_response(token_data, base_url: server_origin)
 
         render json: token_response, content_type: 'application/json'
@@ -416,7 +425,8 @@ module Mcp
 
         token_data = {
           client_id: record.client_id, scope: scope, user_id: record.user_id,
-          org_id: record.org_id, family_id: record.family_id, resource: params[:resource]
+          org_id: record.org_id, family_id: record.family_id,
+          resource: params[:resource].presence || canonical_resource_identifier
         }
 
         outcome = nil
@@ -748,6 +758,14 @@ module Mcp
       def server_origin
         configured = Mcp::Auth.configuration&.authorization_server_url
         configured.presence || "#{request.scheme}://#{request.host_with_port}"
+      end
+
+      # Origin of the MCP RESOURCE server (the token audience). Distinct from
+      # server_origin: with a separate authorization server, the MCP endpoint
+      # still lives on this app's host. Pinned via mcp_server_url when set; else
+      # the request origin (restrict hosts via `config.hosts`).
+      def resource_origin
+        Mcp::Auth.configuration&.mcp_server_url.presence || request.base_url
       end
 
       # === Error Handling ===

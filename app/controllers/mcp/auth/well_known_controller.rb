@@ -116,9 +116,10 @@ module Mcp
         # Remove trailing slash if present
         mcp_path = mcp_path.chomp('/')
 
-        # Build the full resource URL from the pinned server origin so a forged
-        # Host header cannot advertise metadata for an attacker-controlled origin.
-        "#{server_origin}#{mcp_path}"
+        # Build the full resource URL from the MCP server's own origin (pinned via
+        # mcp_server_url when set), NOT the authorization server's — they differ
+        # when a separate authorization server is configured.
+        "#{resource_origin}#{mcp_path}"
       end
 
       def mcp_documentation_url
@@ -129,8 +130,8 @@ module Mcp
           # If it's a full URL, use as-is
           return docs_url if docs_url.start_with?('http://', 'https://')
 
-          # If it's a path, prepend the pinned server origin
-          return "#{server_origin}#{docs_url}"
+          # If it's a path, prepend the MCP server origin
+          return "#{resource_origin}#{docs_url}"
         end
 
         # Default: append /docs to the MCP server path
@@ -138,7 +139,7 @@ module Mcp
         mcp_path = "/#{mcp_path}" unless mcp_path.start_with?('/')
         mcp_path = mcp_path.chomp('/')
 
-        "#{server_origin}#{mcp_path}/docs"
+        "#{resource_origin}#{mcp_path}/docs"
       end
 
       def authorization_server_url
@@ -153,6 +154,11 @@ module Mcp
       def server_origin
         configured = Mcp::Auth.configuration&.authorization_server_url
         configured.presence || "#{request.scheme}://#{request.host_with_port}"
+      end
+
+      # Origin of the MCP resource server; see OauthController#resource_origin.
+      def resource_origin
+        Mcp::Auth.configuration&.mcp_server_url.presence || request.base_url
       end
     end
   end

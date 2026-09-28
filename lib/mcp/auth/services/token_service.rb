@@ -9,6 +9,9 @@ module Mcp
         # spuriously reject an otherwise-valid token.
         CLOCK_SKEW_LEEWAY_SECONDS = 30
 
+        # Claims every access token must carry.
+        REQUIRED_CLAIMS = %w[iss aud sub exp].freeze
+
         class << self
           # Validate access token with optional resource verification (RFC 8707).
           # Supports HS256, RS256, and ES256 — algorithm comes from configuration.
@@ -18,6 +21,12 @@ module Mcp
             begin
               payload = decode_with_known_keys(token)
               return nil unless payload
+
+              # Required claims, checked here too: ruby-jwt versions older than the
+              # `required_claims` decode option silently ignore it, and the gemspec
+              # allows them. Without this, a token lacking `aud` would skip the
+              # audience check below on those versions.
+              return nil unless REQUIRED_CLAIMS.all? { |claim| payload[claim].present? }
 
               # Check expiration manually to ensure proper handling
               return nil if payload['exp'] && (payload['exp'] <= Time.current.to_i)
@@ -83,7 +92,7 @@ module Mcp
               verify_expiration: true,
               verify_not_before: true,
               leeway: CLOCK_SKEW_LEEWAY_SECONDS,
-              required_claims: %w[iss aud sub exp]
+              required_claims: REQUIRED_CLAIMS
             }
           end
 

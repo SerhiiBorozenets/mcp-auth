@@ -14,6 +14,13 @@ Mcp::Auth.configure do |config|
   # Example: config.authorization_server_url = 'https://auth.example.com'
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)
 
+  # Public origin of the MCP resource server (optional - defaults to the request
+  # origin). The token audience, protected-resource metadata and 401 challenge
+  # are built from it. Set it to pin them against a forged Host header, and
+  # always set it when authorization_server_url points at a different host.
+  # Example: config.mcp_server_url = 'https://api.example.com'
+  config.mcp_server_url = ENV.fetch('MCP_SERVER_URL', nil)
+
   # ============================================================================
   # MCP SERVER CONFIGURATION
   # ============================================================================

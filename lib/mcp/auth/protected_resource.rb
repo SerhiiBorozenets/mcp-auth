@@ -81,26 +81,26 @@ module Mcp
         header.split(' ', 2).last.presence
       end
 
-      # Canonical resource identifier for this server (server origin +
-      # mcp_server_path), matching the audience minted into access tokens. Prefer
-      # the configured authorization_server_url so the audience check is pinned to
-      # a trusted origin rather than a (possibly forged) request Host.
+      # Canonical resource identifier for this server (MCP server origin +
+      # mcp_server_path), matching the audience minted into access tokens.
       def mcp_resource_identifier
         path = Mcp::Auth.configuration&.mcp_server_path.presence || '/mcp'
         path = "/#{path}" unless path.start_with?('/')
         "#{mcp_server_origin}#{path.chomp('/')}"
       end
 
-      # The configured authorization_server_url when set, else the request
-      # origin (the host app MUST then restrict hosts via `config.hosts`).
+      # The configured mcp_server_url when set, else the request origin (the host
+      # app MUST then restrict hosts via `config.hosts`). Deliberately NOT
+      # authorization_server_url: with a separate authorization server, the MCP
+      # resource (and its metadata) still lives on this app's host.
       def mcp_server_origin
-        Mcp::Auth.configuration&.authorization_server_url.presence || request.base_url
+        Mcp::Auth.configuration&.mcp_server_url.presence || request.base_url
       end
 
       # RFC 9728 §5.1 / MCP authorization spec: a 401 MUST advertise the
       # protected-resource metadata document via WWW-Authenticate so clients can
-      # bootstrap the OAuth flow. The metadata URL uses the pinned origin so a
-      # forged Host header can't steer clients to attacker-controlled metadata.
+      # bootstrap the OAuth flow. Set mcp_server_url to pin the metadata URL so
+      # a forged Host header can't steer clients to attacker-controlled metadata.
       def render_mcp_unauthorized(error, description, status: :unauthorized)
         response.headers['WWW-Authenticate'] =
           Mcp::Auth::ProtectedResource.www_authenticate(mcp_server_origin, error: error, description: description)

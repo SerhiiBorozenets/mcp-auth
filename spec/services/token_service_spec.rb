@@ -68,6 +68,17 @@ RSpec.describe Mcp::Auth::Services::TokenService do
       expect(data[:client_id]).to eq(oauth_client.client_id)
     end
 
+    it 'rejects a token missing a required claim even if the jwt library ignored required_claims (old ruby-jwt)' do
+      token_str = described_class.generate_access_token(access_token_params, base_url: base_url)
+      # Simulate a ruby-jwt version that silently drops the required_claims option.
+      %w[sub iss aud].each do |claim|
+        payload = JWT.decode(token_str, nil, false).first.except(claim)
+        allow(described_class).to receive(:decode_with_known_keys).and_return(payload)
+
+        expect(described_class.validate_access_token(token_str)).to be_nil, "expected missing #{claim} to be rejected"
+      end
+    end
+
     it 'returns nil for expired token' do
       token_str = described_class.generate_access_token(access_token_params.merge(expires_at: 1.second.ago),
                                                         base_url: base_url)
