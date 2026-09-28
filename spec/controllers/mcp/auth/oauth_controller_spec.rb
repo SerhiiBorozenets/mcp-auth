@@ -242,6 +242,50 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       end
     end
 
+    context 'with a per-user scope policy (validate_scope_for_user)' do
+      before do
+        Mcp::Auth::ScopeRegistry.clear_scopes!
+        Mcp::Auth::ScopeRegistry.register_scope('mcp:read', name: 'Read', description: 'r', required: true)
+        Mcp::Auth::ScopeRegistry.register_scope('mcp:admin', name: 'Admin', description: 'a')
+        allow(controller).to receive(:mcp_current_user).and_return(user)
+      end
+
+      after { Mcp::Auth::ScopeRegistry.clear_scopes! }
+
+      it 'does not grant a scope the policy denies, even when the POST is tampered to include it' do
+        allow(Mcp::Auth.configuration).to receive(:validate_scope_for_user)
+          .and_return(->(_user, _org, scope) { scope != 'mcp:admin' })
+
+        post :approve, params: base_params.merge(
+          approved: 'true', scope: 'mcp:read mcp:admin', scopes: %w[mcp:read mcp:admin]
+        )
+
+        expect(response).to have_http_status(:redirect)
+        expect(Mcp::Auth::AuthorizationCode.last.scope.split).to contain_exactly('mcp:read')
+      end
+
+      it 'does not re-add a REQUIRED scope the policy denies' do
+        allow(Mcp::Auth.configuration).to receive(:validate_scope_for_user)
+          .and_return(->(_user, _org, scope) { scope != 'mcp:read' })
+
+        post :approve, params: base_params.merge(
+          approved: 'true', scope: 'mcp:read mcp:admin', scopes: %w[mcp:read mcp:admin]
+        )
+
+        expect(Mcp::Auth::AuthorizationCode.last.scope.split).to contain_exactly('mcp:admin')
+      end
+    end
+
+    it 'sends anti-framing headers and no CORS on the consent page (RFC 9700 §2.6)' do
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      get :authorize, params: base_params
+
+      expect(response.headers['X-Frame-Options']).to eq('DENY')
+      expect(response.headers['Content-Security-Policy']).to include("frame-ancestors 'none'")
+      expect(response.headers['Access-Control-Allow-Origin']).to be_nil
+    end
+
     it 'rejects a non-S256 (plain) code_challenge_method (PKCE downgrade)' do
       get :authorize, params: base_params.merge(code_challenge: 'abc', code_challenge_method: 'plain')
 
@@ -392,6 +436,16 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
   describe 'POST #token refresh_token grant' do
     let!(:refresh) { create(:refresh_token, oauth_client: client, scope: 'mcp:read mcp:write') }
+
+    it 'marks the token response as non-cacheable (RFC 6749 §5.1) and keeps CORS for browser clients' do
+      post :token, params: {
+        grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+      }
+
+      expect(response.headers['Cache-Control']).to eq('no-store')
+      expect(response.headers['Pragma']).to eq('no-cache')
+      expect(response.headers['Access-Control-Allow-Origin']).to eq('*')
+    end
 
     it 'narrows scope when a subset is requested (RFC 6749 §6)' do
       post :token, params: {

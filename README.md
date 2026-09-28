@@ -162,8 +162,9 @@ Edit `config/initializers/mcp_auth.rb`:
 
 ```ruby
 Mcp::Auth.configure do |config|
-  # OAuth secret for JWT signing
-  config.oauth_secret = ENV.fetch('MCP_HMAC_SECRET', Rails.application.secret_key_base)
+  # OAuth secret for JWT signing (HS256) — required outside development/test,
+  # and must not be secret_key_base. Generate with `rails secret`.
+  config.oauth_secret = ENV['MCP_HMAC_SECRET']
   
   # Authorization server URL (optional - defaults to same as resource server)
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)

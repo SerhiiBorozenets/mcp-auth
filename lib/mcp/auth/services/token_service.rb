@@ -455,19 +455,40 @@ module Mcp
 
           # HMAC secret for HS256 signing. A dedicated secret MUST be configured:
           # silently reusing Rails' secret_key_base (which also signs cookies and
-          # every MessageVerifier) breaks key separation. In production a missing
-          # secret is a hard error; in dev/test we fall back so the gem still boots.
+          # every MessageVerifier) breaks key separation. Outside development/test
+          # a missing secret — or one that IS secret_key_base, e.g. via an
+          # `ENV.fetch('MCP_HMAC_SECRET', secret_key_base)` initializer — is a hard
+          # error; in dev/test we fall back so the gem still boots.
           def oauth_secret
             secret = Mcp::Auth.configuration&.oauth_secret
-            return secret if secret.present?
+            problem = oauth_secret_problem(secret)
+            return secret if problem.nil?
 
-            if defined?(Rails) && Rails.env.production?
-              raise Mcp::Auth::Error,
-                    'Mcp::Auth.configuration.oauth_secret must be set — refusing to sign tokens with ' \
-                    'Rails.application.secret_key_base in production (key separation).'
+            raise Mcp::Auth::Error, problem unless local_env?
+
+            secret.presence || Rails.application.secret_key_base
+          end
+
+          # Why the configured HS256 secret is unacceptable outside dev/test, or
+          # nil when it is fine. Public so boot checks / `mcp_auth:doctor` can
+          # report it before the first token request fails.
+          def oauth_secret_problem(secret = Mcp::Auth.configuration&.oauth_secret)
+            return nil if asymmetric_signing? # RS256/ES256 don't use oauth_secret
+
+            if secret.blank?
+              'Mcp::Auth.configuration.oauth_secret must be set (e.g. ENV["MCP_HMAC_SECRET"]) — refusing to ' \
+                'sign tokens with Rails.application.secret_key_base outside development/test (key separation).'
+            elsif defined?(Rails) && Rails.application &&
+                  ActiveSupport::SecurityUtils.secure_compare(secret.to_s, Rails.application.secret_key_base.to_s)
+              'Mcp::Auth.configuration.oauth_secret must not be Rails.application.secret_key_base — set a ' \
+                'dedicated secret (e.g. ENV["MCP_HMAC_SECRET"], generate with `rails secret`).'
             end
+          end
 
-            Rails.application.secret_key_base
+          public :oauth_secret_problem
+
+          def local_env?
+            defined?(Rails) && (Rails.env.development? || Rails.env.test?)
           end
 
           def token_lifetime

@@ -210,6 +210,33 @@ RSpec.describe Mcp::Auth::Services::TokenService do
         .to raise_error(Mcp::Auth::Error, /oauth_secret/)
     end
 
+    it 'refuses a secret equal to secret_key_base outside dev/test (ENV.fetch fallback initializers)' do
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new('production'))
+      allow(Mcp::Auth.configuration).to receive(:oauth_secret).and_return(Rails.application.secret_key_base)
+
+      expect { described_class.send(:oauth_secret) }
+        .to raise_error(Mcp::Auth::Error, /must not be Rails.application.secret_key_base/)
+    end
+
+    it 'applies to non-production deployed environments too (e.g. staging)' do
+      allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new('staging'))
+      allow(Mcp::Auth.configuration).to receive(:oauth_secret).and_return(nil)
+
+      expect { described_class.send(:oauth_secret) }.to raise_error(Mcp::Auth::Error)
+    end
+
+    it 'still falls back to secret_key_base in development/test' do
+      allow(Mcp::Auth.configuration).to receive(:oauth_secret).and_return(nil)
+
+      expect(described_class.send(:oauth_secret)).to eq(Rails.application.secret_key_base)
+    end
+
+    it 'reports no problem for asymmetric signing, which does not use oauth_secret' do
+      allow(Mcp::Auth.configuration).to receive(:asymmetric_signing?).and_return(true)
+
+      expect(described_class.oauth_secret_problem(nil)).to be_nil
+    end
+
     it 'uses the configured secret when present (no error)' do
       allow(Rails).to receive(:env).and_return(ActiveSupport::StringInquirer.new('production'))
       allow(Mcp::Auth.configuration).to receive(:oauth_secret).and_return('dedicated-secret')

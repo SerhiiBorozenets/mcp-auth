@@ -5,9 +5,11 @@ Mcp::Auth.configure do |config|
   # OAUTH CONFIGURATION
   # ============================================================================
 
-  # OAuth secret for signing JWTs
-  # Should be a secure random string in production (use: rails secret)
-  config.oauth_secret = ENV.fetch('MCP_HMAC_SECRET', Rails.application.secret_key_base)
+  # OAuth secret for signing JWTs (HS256). REQUIRED outside development/test and
+  # must be DEDICATED — not Rails.application.secret_key_base, which also signs
+  # your cookies. Generate one with `rails secret`. (Dev/test fall back to
+  # secret_key_base when unset.) Not used with RS256/ES256 signing.
+  config.oauth_secret = ENV['MCP_HMAC_SECRET']
 
   # Authorization server URL (optional - defaults to same as resource server)
   # Set this if you're using a separate authorization server
@@ -210,7 +212,6 @@ Mcp::Auth.configure do |config|
   #        * :required - Whether scope is required (true/false)
   #        * :pre_selected - Whether scope was in the original request
   #    - @authorization_params: Hash of OAuth parameters to preserve
-end
 
   # ============================================================================
   # JWT SIGNING (OPTIONAL)
@@ -236,13 +237,17 @@ end
   # Access tokens, refresh tokens, authorization codes, and client secrets are
   # stored as one-way SHA-256 digests. While `secret_dual_read` is true (the
   # default), a presented value is matched against BOTH its digest and any legacy
-  # PLAINTEXT row not yet backfilled — this makes the upgrade safe under rolling
-  # deploys and safe to roll back.
+  # PLAINTEXT row not yet backfilled, so this version keeps working before and
+  # while the backfill migration runs.
   #
-  # After you have deployed this version, run `rails db:migrate` (backfills every
-  # row to a digest), and no old app code remains, HARDEN by turning it off so
-  # plaintext-form matches are rejected:
+  # Upgrade order: deploy this version to EVERY server first, then run
+  # `rails db:migrate`. Older versions (<= 0.5.0) cannot read hashed rows, so
+  # rolling back after the backfill signs every client out.
+  #
+  # Once every row is hashed, HARDEN by turning it off so plaintext-form matches
+  # are rejected:
   # config.secret_dual_read = false
+end
 
 # ============================================================================
 # PROTECTING YOUR MCP ENDPOINT (RESOURCE SERVER)

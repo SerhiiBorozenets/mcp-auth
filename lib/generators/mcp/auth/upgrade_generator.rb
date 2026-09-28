@@ -33,8 +33,11 @@ module Mcp
         def show_post_install_message
           say "\nMCP Auth upgrade migration added.", :green
           say 'Next steps:'
-          say '  1. Deploy this gem version and run migrations together:'
+          say '  1. Deploy this gem version to EVERY server first, then run:'
           say '       rails db:migrate   # backfills existing secrets to sha256$ digests, in place'
+          say '     (Versions <= 0.5.0 cannot read hashed rows: rolling back after this'
+          say '     migration signs every client out.)'
+          say '     Also set a dedicated MCP_HMAC_SECRET (not secret_key_base) if you use HS256.'
           say '  2. Once every row is hashed and no old app code remains, harden by'
           say '     disabling the transitional dual-read in config/initializers/mcp_auth.rb:'
           say '       config.secret_dual_read = false'

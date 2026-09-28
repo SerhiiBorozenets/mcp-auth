@@ -4,8 +4,15 @@ module Mcp
   module Auth
     class OauthController < ApplicationController
       skip_before_action :verify_authenticity_token, only: %i[token register revoke introspect userinfo]
-      before_action :set_cors_headers
+      # CORS only on the endpoints browser-based clients call directly. RFC 9700
+      # §2.6: the authorization endpoint (and its consent/approve step) is a
+      # top-level navigation and MUST NOT be exposed cross-origin.
+      before_action :set_cors_headers, except: %i[authorize approve]
       before_action :handle_options_request
+      # RFC 6749 §5.1: responses carrying tokens/credentials MUST NOT be cached.
+      before_action :set_no_store_headers, only: %i[token register introspect userinfo]
+      # The consent page must not be framed (clickjacking a one-click Authorize).
+      before_action :set_anti_framing_headers, only: %i[authorize approve]
       before_action :require_current_schema
       before_action :require_https, only: %i[authorize approve token register revoke introspect userinfo]
 
@@ -64,6 +71,12 @@ module Mcp
           if requested_scopes.any?
             approved_scopes &= (requested_scopes | Mcp::Auth::ScopeRegistry.validate_scopes([]))
           end
+
+          # The host app's per-user scope policy (validate_scope_for_user) hides
+          # scopes on the consent screen, but a user can still POST any scope
+          # name here — enforce the policy on what is actually granted, required
+          # scopes included.
+          approved_scopes = approved_scopes.select { |scope| scope_permitted_for_user?(scope) }
 
           # Preserve standard OpenID Connect scopes that were originally requested.
           # They gate identity claims (already governed by the userinfo/id_token
@@ -685,15 +698,7 @@ module Mcp
         all_available = Mcp::Auth::ScopeRegistry.available_scopes.keys
 
         # Filter by user permissions if configured
-        if Mcp::Auth.configuration.validate_scope_for_user
-          all_available = all_available.select do |scope|
-            Mcp::Auth.configuration.validate_scope_for_user.call(
-              mcp_current_user,
-              current_org,
-              scope
-            )
-          end
-        end
+        all_available = all_available.select { |scope| scope_permitted_for_user?(scope) }
 
         # Format all available scopes for display
         # Mark as pre-selected if they were in the original request
@@ -705,6 +710,15 @@ module Mcp
             pre_selected: requested.include?(scope_data[:key])
           )
         end
+      end
+
+      # Whether the host app's per-user scope policy allows `scope` for the
+      # signed-in user (always true when no policy is configured).
+      def scope_permitted_for_user?(scope)
+        policy = Mcp::Auth.configuration&.validate_scope_for_user
+        return true unless policy
+
+        policy.call(mcp_current_user, current_org, scope) ? true : false
       end
 
       # Get required scopes from requested scopes list
@@ -727,6 +741,16 @@ module Mcp
 
       def handle_options_request
         head :no_content if request.method == 'OPTIONS'
+      end
+
+      def set_no_store_headers
+        response.headers['Cache-Control'] = 'no-store'
+        response.headers['Pragma'] = 'no-cache'
+      end
+
+      def set_anti_framing_headers
+        response.headers['X-Frame-Options'] = 'DENY'
+        response.headers['Content-Security-Policy'] = "frame-ancestors 'none'"
       end
 
       # Fail with a clear, actionable error (not a cryptic `unknown attribute`)

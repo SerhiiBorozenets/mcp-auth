@@ -20,15 +20,27 @@ namespace :mcp_auth do
   desc "Check that the database schema matches the installed mcp-auth version"
   task doctor: :environment do
     missing = Mcp::Auth::SchemaGuard.missing_columns
+    secret_problem = Mcp::Auth::Services::TokenService.oauth_secret_problem
+    healthy = true
 
     if missing.empty?
       puts "mcp-auth #{Mcp::Auth::VERSION}: database schema is up to date."
     else
+      healthy = false
       warn "mcp-auth #{Mcp::Auth::VERSION}: PENDING MIGRATION"
       warn "  Missing: #{missing.join(', ')}"
       warn '  Run: rails g mcp:auth:upgrade && rails db:migrate'
-      exit 1
     end
+
+    if secret_problem
+      # A hard error at token-signing time outside development/test.
+      healthy = false unless Rails.env.development? || Rails.env.test?
+      warn "mcp-auth: signing secret: #{secret_problem}"
+    else
+      puts 'mcp-auth: signing configuration OK.'
+    end
+
+    exit 1 unless healthy
   end
 
   desc "Show MCP Auth statistics"
