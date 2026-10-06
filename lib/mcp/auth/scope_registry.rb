@@ -60,6 +60,18 @@ module Mcp
           @custom_scopes = {}
         end
 
+        # Scopes that may appear in a request without being rejected as unknown:
+        # registered scopes plus the standard OIDC scopes and offline_access.
+        def recognized_scope?(scope)
+          scope_exists?(scope) || (STANDARD_OIDC_SCOPES + %w[offline_access]).include?(scope.to_s)
+        end
+
+        # Tokens of a scope string (or array) that are not recognized.
+        def unknown_scopes(requested_scopes)
+          scopes = requested_scopes.is_a?(String) ? requested_scopes.split : Array(requested_scopes)
+          scopes.reject { |scope| recognized_scope?(scope) }
+        end
+
         # Check if a scope exists
         def scope_exists?(scope)
           available_scopes.key?(scope.to_s)

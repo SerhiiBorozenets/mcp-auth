@@ -24,6 +24,10 @@ module Mcp
           return render_error('invalid_request', 'Missing or invalid required parameters')
         end
 
+        # RFC 6749 §4.1.2.1: the redirect_uri is registered and exact-matched by
+        # now, so it is safe to report an unknown scope back to the client.
+        return redirect_with_error('invalid_scope', 'Unsupported scope requested') if unsupported_scope_requested?
+
         if mcp_user_signed_in?
           handle_signed_in_user
         else
@@ -36,6 +40,7 @@ module Mcp
         return redirect_to main_app.new_user_session_path unless mcp_user_signed_in?
 
         return render_error('invalid_request', 'Missing required parameters') unless valid_authorization_params?
+        return redirect_with_error('invalid_scope', 'Unsupported scope requested') if unsupported_scope_requested?
 
         if params[:approved] == 'true'
           # Get selected scopes from checkboxes
@@ -226,6 +231,14 @@ module Mcp
       # that prevents authorization-code interception via open redirect, so it is
       # validated BEFORE the code is ever issued — and on failure we render an
       # error instead of redirecting (we must never redirect to an unverified URI).
+      def unsupported_scope_requested?
+        return false unless Mcp::Auth.configuration&.strict_scope_validation != false
+
+        unknown = Mcp::Auth::ScopeRegistry.unknown_scopes(params[:scope].to_s)
+        Rails.logger.warn "[OAuth] Rejected unsupported scope(s): #{unknown.join(' ')}" if unknown.any?
+        unknown.any?
+      end
+
       def registered_client_with_valid_redirect?
         client = oauth_client
         unless client
@@ -661,6 +674,9 @@ module Mcp
 
       def show_consent_screen
         @client_name = get_client_name
+        @redirect_host = URI.parse(params[:redirect_uri].to_s).host.to_s rescue ''
+        @redirect_loopback = Mcp::Auth::OauthClient::LOOPBACK_HOSTS.include?(@redirect_host.downcase)
+        @redirect_verified = verified_redirect_host?(@redirect_host)
         @requested_scopes = parse_and_validate_scopes
         @authorization_params = params.to_unsafe_h.slice(
           :response_type, :client_id, :redirect_uri, :scope,
@@ -686,6 +702,14 @@ module Mcp
         lookup_context.exists?(path, [], false)
       rescue StandardError
         false
+      end
+
+      # Exact host or '*.example.com' wildcard from config.verified_redirect_hosts.
+      def verified_redirect_host?(host)
+        Array(Mcp::Auth.configuration&.verified_redirect_hosts).any? do |entry|
+          entry = entry.to_s.downcase
+          entry.start_with?('*.') ? host.downcase.end_with?(entry[1..]) : host.downcase == entry
+        end
       end
 
       def get_client_name

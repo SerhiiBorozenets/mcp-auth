@@ -98,6 +98,30 @@ Mcp::Auth.configure do |config|
   config.current_org_method = :current_org
 
   # ============================================================================
+  # DYNAMIC CLIENT REGISTRATION (DCR) POLICY
+  # ============================================================================
+
+  # /oauth/register is open (RFC 7591), so restrict where authorization codes can
+  # be sent. Plain http is always rejected except for loopback hosts.
+  #
+  # Restrict registration to known clients (Strings match exactly, Regexps match
+  # the full URI). nil = any https / native-scheme URI.
+  # config.allowed_redirect_uri_patterns = [
+  #   %r{\Ahttps://claude\.ai/api/mcp/auth_callback\z},
+  #   %r{\Ahttps://chatgpt\.com/connector_platform_oauth_redirect\z}
+  # ]
+
+  # RFC 8252 loopback redirects (localhost / 127.0.0.1 / [::1], any port).
+  # config.allow_loopback_redirects = true
+
+  # Redirect hosts shown as "verified" on the consent screen; others are flagged
+  # as unverified applications.
+  # config.verified_redirect_hosts = %w[claude.ai chatgpt.com]
+
+  # Reject unknown scopes (registration + /oauth/authorize invalid_scope).
+  # config.strict_scope_validation = true
+
+  # ============================================================================
   # SCOPE CONFIGURATION
   # ============================================================================
 

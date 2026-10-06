@@ -128,4 +128,48 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
       expect(client.supports_grant_type?('password')).to be false
     end
   end
+  describe 'DCR redirect/scope policy' do
+    let(:attrs) { { client_name: 'X', redirect_uris: ['https://c.example.com/cb'] } }
+
+    it 'allows https, loopback http on any port, and native schemes' do
+      %w[https://c.example.com/cb http://localhost:8123/cb http://127.0.0.1/cb http://[::1]:9/cb cursor://auth/cb].each do |uri|
+        expect(described_class.new(attrs.merge(redirect_uris: [uri]))).to be_valid, uri
+      end
+    end
+
+    it 'rejects http on a non-loopback host' do
+      expect(described_class.new(attrs.merge(redirect_uris: ['http://evil.example.com/cb']))).not_to be_valid
+    end
+
+    it 'can disable loopback redirects' do
+      allow(Mcp::Auth.configuration).to receive(:allow_loopback_redirects).and_return(false)
+      expect(described_class.new(attrs.merge(redirect_uris: ['http://localhost:1/cb']))).not_to be_valid
+    end
+
+    it 'enforces the allowlist for non-loopback URIs when configured' do
+      allow(Mcp::Auth.configuration).to receive(:allowed_redirect_uri_patterns)
+        .and_return(['https://claude.ai/api/mcp/auth_callback'])
+
+      expect(described_class.new(attrs.merge(redirect_uris: ['https://claude.ai/api/mcp/auth_callback']))).to be_valid
+      expect(described_class.new(attrs)).not_to be_valid
+    end
+
+    it 'rejects unknown scopes when strict, and narrows them when not' do
+      expect(described_class.new(attrs.merge(scope: 'mcp:read admin *'))).not_to be_valid
+
+      allow(Mcp::Auth.configuration).to receive(:strict_scope_validation).and_return(false)
+      client = described_class.new(attrs.merge(scope: 'mcp:read admin *'))
+      expect(client).to be_valid
+      expect(client.scope).to eq('mcp:read')
+    end
+
+    it 'accepts OIDC scopes' do
+      expect(described_class.new(attrs.merge(scope: 'openid profile email mcp:read'))).to be_valid
+    end
+
+    it 'requires client_uri to be an http(s) URL' do
+      expect(described_class.new(attrs.merge(client_uri: 'javascript:alert(1)'))).not_to be_valid
+      expect(described_class.new(attrs.merge(client_uri: 'https://c.example.com'))).to be_valid
+    end
+  end
 end

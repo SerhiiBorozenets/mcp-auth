@@ -276,6 +276,15 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       end
     end
 
+    it 'returns invalid_scope to the registered redirect for an unknown requested scope' do
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      get :authorize, params: base_params.merge(scope: 'mcp:read admin')
+
+      expect(response).to have_http_status(:redirect)
+      expect(response.location).to include('error=invalid_scope')
+    end
+
     it 'sends anti-framing headers and no CORS on the consent page (RFC 9700 §2.6)' do
       allow(controller).to receive(:mcp_current_user).and_return(user)
 
@@ -314,6 +323,43 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
       expect(response).to have_http_status(:bad_request)
       expect(JSON.parse(response.body)['error']).to eq('invalid_client_metadata')
+    end
+
+    it 'rejects plain-http (non-loopback) redirect URIs' do
+      post :register, params: { client_name: 'X', redirect_uris: ['http://attacker.example.com/cb'] }
+
+      expect(response).to have_http_status(:bad_request)
+      expect(JSON.parse(response.body)['error']).to eq('invalid_client_metadata')
+    end
+
+    it 'rejects wildcard and unknown privileged scopes' do
+      %w[* admin].each do |scope|
+        post :register, params: { client_name: 'X', redirect_uris: ['https://c.example.com/cb'], scope: scope }
+
+        expect(response).to have_http_status(:bad_request)
+        expect(JSON.parse(response.body)['error']).to eq('invalid_client_metadata')
+      end
+    end
+
+    it 'rejects redirect URIs outside a configured allowlist' do
+      allow(Mcp::Auth.configuration).to receive(:allowed_redirect_uri_patterns)
+        .and_return([%r{\Ahttps://claude\.ai/}])
+
+      post :register, params: { client_name: 'X', redirect_uris: ['https://attacker.example.com/cb'] }
+      expect(response).to have_http_status(:bad_request)
+
+      post :register, params: { client_name: 'X', redirect_uris: ['https://claude.ai/api/mcp/auth_callback'] }
+      expect(response).to have_http_status(:ok)
+    end
+
+    it 'sanitizes the client_name (control/bidi characters, length)' do
+      post :register, params: {
+        client_name: "Cl\u202Eaude\n#{'x' * 300}", redirect_uris: ['https://c.example.com/cb']
+      }
+
+      name = JSON.parse(response.body)['client_name']
+      expect(name).not_to match(/[\u202E\n]/)
+      expect(name.length).to be <= Mcp::Auth::OauthClient::MAX_CLIENT_NAME_LENGTH
     end
 
     it 'returns a clear error (not a cryptic crash) when a gem migration is pending' do

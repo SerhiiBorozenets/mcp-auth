@@ -110,6 +110,22 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   DENY` and `frame-ancestors 'none'` on authorize/approve, and CORS headers are no
   longer sent there (RFC 9700 §2.6); the other endpoints keep CORS.
 
+### Security (DCR hardening)
+- **Redirect-URI policy at registration.** Plain `http` is rejected except for
+  loopback hosts (`localhost`, `127.0.0.1`, `[::1]`, any port; RFC 8252 §7.3);
+  optional `allowed_redirect_uri_patterns` restricts registration to known
+  clients, and `allow_loopback_redirects` can disable loopback. **Breaking:**
+  non-loopback `http://` redirect URIs no longer register.
+- **Unknown scopes are rejected** at registration (`invalid_client_metadata`) and
+  at `/oauth/authorize` (`invalid_scope` redirect, RFC 6749 §4.1.2.1) instead of
+  being stored/echoed or silently dropped. OIDC scopes and `offline_access` are
+  accepted. `strict_scope_validation = false` restores the old narrowing.
+- **`client_name` is sanitized** (control/bidi/zero-width characters stripped,
+  100-char cap) and `client_uri` must be an http(s) URL, since both are
+  attacker-chosen at open registration and shown on the consent page.
+- **Consent screen shows the redirect host** and flags applications whose host
+  isn't in `verified_redirect_hosts` as unverified (loopback is exempt).
+
 ### Fixed
 - The generated initializer closed the `Mcp::Auth.configure` block before the
   JWT-signing and `secret_dual_read` sections, so uncommenting

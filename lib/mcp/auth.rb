@@ -44,7 +44,11 @@ module Mcp
                     :token_signing_kid,
                     :secret_dual_read,
                     :refresh_token_reuse_grace_period,
-                    :mcp_server_url
+                    :mcp_server_url,
+                    :allowed_redirect_uri_patterns,
+                    :allow_loopback_redirects,
+                    :verified_redirect_hosts,
+                    :strict_scope_validation
 
       # token_signing_algorithm has a validating writer defined below, so only
       # the reader is generated here.
@@ -96,6 +100,23 @@ module Mcp
         # back. Set to false once every row is hashed (the backfill migration has
         # run and no old code remains) to reject plaintext-form matches.
         @secret_dual_read = true
+        # Dynamic Client Registration redirect-URI policy. Registration is open
+        # (RFC 7591), so a rogue client could register an attacker-controlled
+        # redirect_uri and phish a user into approving it on the genuine consent
+        # page. Plain http is ALWAYS rejected except for loopback hosts. Set
+        # allowed_redirect_uri_patterns (Strings, matched exactly, or Regexps)
+        # to additionally restrict registration to known clients; nil keeps any
+        # https / native-scheme URI. Loopback (localhost, 127.0.0.1, [::1], any
+        # port; RFC 8252 §7.3) is allowed unless allow_loopback_redirects is false.
+        @allowed_redirect_uri_patterns = nil
+        @allow_loopback_redirects = true
+        # Redirect hosts shown as "verified" on the consent screen (exact host or
+        # '*.example.com'); any other host is flagged as unverified.
+        @verified_redirect_hosts = []
+        # true: unknown scopes are rejected (invalid_client_metadata at
+        # registration, invalid_scope at /oauth/authorize). false: silently
+        # dropped, the pre-0.6.0 behavior.
+        @strict_scope_validation = true
       end
 
       def token_signing_algorithm=(value)

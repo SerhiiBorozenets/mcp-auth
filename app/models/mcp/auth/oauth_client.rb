@@ -8,6 +8,7 @@ module Mcp
 
       # Set defaults BEFORE validation
       before_validation :set_defaults, on: :create
+      before_validation :sanitize_client_name
       # Hash the secret at rest just before persisting (covers both the
       # auto-generated secret and one a caller sets explicitly).
       before_save :hash_client_secret_at_rest
@@ -31,11 +32,17 @@ module Mcp
       # (e.g. `javascript://%0aalert(1)` would otherwise pass the `://` check).
       FORBIDDEN_REDIRECT_SCHEMES = %w[javascript data vbscript file about blob].freeze
 
+      LOOPBACK_HOSTS = %w[localhost 127.0.0.1 [::1] ::1].freeze
+      MAX_CLIENT_NAME_LENGTH = 100
+
       validates :client_id, presence: true, uniqueness: true
       validates :client_secret, presence: true
       validates :token_endpoint_auth_method, inclusion: { in: TOKEN_ENDPOINT_AUTH_METHODS }
       validate :validate_redirect_uris
       validate :validate_grant_and_response_types
+      validate :validate_redirect_uri_policy
+      validate :validate_scope_known
+      validate :validate_client_uri
 
       serialize :redirect_uris, coder: JSON
       serialize :grant_types, coder: JSON
@@ -134,6 +141,75 @@ module Mcp
         (Array(response_types) - SUPPORTED_RESPONSE_TYPES).each do |rt|
           errors.add(:response_types, "contains an unsupported response type: #{rt}")
         end
+      end
+
+      # The consent page shows client_name, which is attacker-chosen at open
+      # registration: strip control/format characters (bidi overrides, zero-width)
+      # and cap the length so it can't impersonate or spoof layout.
+      def sanitize_client_name
+        return if client_name.blank?
+
+        self.client_name = client_name.to_s.gsub(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/, ' ').squish.truncate(MAX_CLIENT_NAME_LENGTH)
+      end
+
+      # OAuth 2.1 / RFC 9700 §4.1.1: redirect URIs must be https, or http only on
+      # a loopback host; and, when configured, must match the allowlist.
+      def validate_redirect_uri_policy
+        return unless Array(grant_types).include?('authorization_code')
+
+        Array(redirect_uris).each do |uri|
+          next unless valid_redirect_uri_format?(uri) # already reported
+
+          parsed = URI.parse(uri.to_s)
+          loopback = loopback_redirect?(parsed)
+          if parsed.is_a?(URI::HTTP) && !parsed.is_a?(URI::HTTPS) && !loopback
+            errors.add(:redirect_uris, "must use https (http is only allowed for loopback): #{uri}")
+          elsif loopback && !config_value(:allow_loopback_redirects, true)
+            errors.add(:redirect_uris, "loopback redirect URIs are not allowed: #{uri}")
+          elsif !loopback && !redirect_uri_allowlisted?(uri)
+            errors.add(:redirect_uris, "is not an allowed redirect URI: #{uri}")
+          end
+        end
+      end
+
+      def loopback_redirect?(parsed)
+        parsed.is_a?(URI::HTTP) && LOOPBACK_HOSTS.include?(parsed.host.to_s.downcase)
+      end
+
+      def redirect_uri_allowlisted?(uri)
+        patterns = config_value(:allowed_redirect_uri_patterns, nil)
+        return true if patterns.nil?
+
+        Array(patterns).any? { |pat| pat.is_a?(Regexp) ? pat.match?(uri.to_s) : pat.to_s == uri.to_s }
+      end
+
+      # Reject (strict) or narrow (non-strict) scopes the server doesn't know, so
+      # `*` / `admin` can't be registered and echoed back.
+      def validate_scope_known
+        return if scope.blank?
+
+        unknown = Mcp::Auth::ScopeRegistry.unknown_scopes(scope)
+        return if unknown.empty?
+
+        if config_value(:strict_scope_validation, true)
+          errors.add(:scope, "contains unsupported scope(s): #{unknown.join(' ')}")
+        else
+          self.scope = (scope.split - unknown).join(' ')
+        end
+      end
+
+      def validate_client_uri
+        return if client_uri.blank?
+
+        parsed = URI.parse(client_uri.to_s)
+        errors.add(:client_uri, 'must be an http(s) URL') unless parsed.is_a?(URI::HTTP) && parsed.host.present?
+      rescue URI::InvalidURIError
+        errors.add(:client_uri, 'must be an http(s) URL')
+      end
+
+      def config_value(key, default)
+        config = Mcp::Auth.configuration
+        config.respond_to?(key) ? config.public_send(key) : default
       end
 
       def valid_redirect_uri_format?(uri)
