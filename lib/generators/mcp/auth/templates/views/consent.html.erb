@@ -297,7 +297,20 @@
     <div class="client-info">
       <strong><%%= @client_name %></strong>
       <p>wants to access your MCP server</p>
+      <p class="redirect-info">
+        You will be sent back to <strong><%%= @redirect_host.presence || 'an unknown address' %></strong>
+      </p>
     </div>
+
+    <%% unless @redirect_verified || @redirect_loopback %>
+    <div class="warning-box">
+      <div class="warning-icon">⚠️</div>
+      <div class="warning-text">
+        <strong>Unverified application.</strong> The name above was supplied by the application itself.
+        Only continue if you started this connection and recognize the address above.
+      </div>
+    </div>
+    <%% end %>
 
     <%% if @requested_scopes.any? { |s| s[:required] } %>
     <div class="warning-box">

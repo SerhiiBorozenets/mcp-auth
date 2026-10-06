@@ -5,15 +5,17 @@ module Mcp
     module Services
       class AuthorizationService
         class << self
-          # Generate authorization code with PKCE support
+          # Generate authorization code with PKCE support. The code is returned to
+          # the client in plaintext, but only its digest is persisted (hashed at
+          # rest).
           def generate_authorization_code(params, user:, org:)
             code = SecureRandom.hex(32)
 
             # Use provided scope or default to all registered scopes
             scope = params[:scope].presence || Mcp::Auth::ScopeRegistry.default_scope_string
 
-            authorization_code = Mcp::Auth::AuthorizationCode.create!(
-              code: code,
+            Mcp::Auth::AuthorizationCode.create!(
+              code: Mcp::Auth::SecretHashing.digest(code),
               client_id: params[:client_id],
               redirect_uri: params[:redirect_uri],
               code_challenge: params[:code_challenge],
@@ -22,11 +24,11 @@ module Mcp
               scope: scope,
               user: user,
               org: org,
-              expires_at: authorization_code_lifetime.minutes.from_now
+              expires_at: authorization_code_lifetime.seconds.from_now
             )
 
             Rails.logger.info "[AuthorizationService] Authorization code generated for user #{user.id}"
-            authorization_code.code
+            code
           rescue ActiveRecord::RecordInvalid => e
             Rails.logger.error "[AuthorizationService] Failed to create authorization code: #{e.message}"
             nil
@@ -36,7 +38,9 @@ module Mcp
           def validate_authorization_code(code)
             return nil if code.blank?
 
-            authorization_code = Mcp::Auth::AuthorizationCode.active.find_by(code: code)
+            authorization_code = Mcp::Auth::AuthorizationCode.active
+                                                             .where(code: Mcp::Auth::SecretHashing.lookup_candidates(code))
+                                                             .first
             return nil unless authorization_code
 
             {
@@ -61,7 +65,8 @@ module Mcp
           # and gets nil. Returns the code's data on success, nil if the code was
           # already consumed (or never existed).
           def consume_authorization_code(code)
-            authorization_code = Mcp::Auth::AuthorizationCode.find_by(code: code)
+            authorization_code = Mcp::Auth::AuthorizationCode
+                                 .where(code: Mcp::Auth::SecretHashing.lookup_candidates(code)).first
             return nil unless authorization_code
 
             code_data = {
@@ -101,8 +106,13 @@ module Mcp
 
           private
 
+          # Authorization-code TTL in SECONDS (matching every other lifetime in
+          # the gem). Read from the single canonical config source so an app that
+          # configures via Mcp::Auth.configure and one that relies on defaults
+          # agree; 1800s = 30 minutes. (Historically this was read from a second
+          # config object and applied as `.minutes`, yielding 30-HOUR codes.)
           def authorization_code_lifetime
-            Rails.application.config.mcp_auth.authorization_code_lifetime || 30
+            Mcp::Auth.configuration&.authorization_code_lifetime || 1800
           end
         end
       end

@@ -3,6 +3,23 @@
 require 'rails_helper'
 
 RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
+  describe '.www_authenticate (reusable RFC 9728 challenge for Rack middleware)' do
+    it 'points at the protected-resource metadata with an invalid_token error by default' do
+      header = described_class.www_authenticate('https://example.com')
+
+      expect(header).to start_with('Bearer ')
+      expect(header).to include('error="invalid_token"')
+      expect(header).to include('resource_metadata="https://example.com/.well-known/oauth-protected-resource"')
+    end
+
+    it 'accepts a custom error and description' do
+      header = described_class.www_authenticate('https://e.com', error: 'insufficient_scope', description: 'nope')
+
+      expect(header).to include('error="insufficient_scope"')
+      expect(header).to include('error_description="nope"')
+    end
+  end
+
   let(:user) { create(:user) }
   let(:oauth_client) { create(:oauth_client) }
   let(:token) do
@@ -39,9 +56,28 @@ RSpec.describe Mcp::Auth::ProtectedResource, type: :controller do
       expect(JSON.parse(response.body)['error']).to eq('invalid_token')
     end
 
+    it 'advertises metadata on the configured MCP origin, not a forged Host header' do
+      allow(Mcp::Auth.configuration).to receive(:mcp_server_url).and_return('https://api.example.com')
+      request.host = 'evil.example.com'
+
+      get :index
+
+      expect(response.headers['WWW-Authenticate'])
+        .to include('resource_metadata="https://api.example.com/.well-known/oauth-protected-resource"')
+    end
+
+    it 'accepts a valid token when a separate authorization server is configured' do
+      allow(Mcp::Auth.configuration).to receive(:authorization_server_url).and_return('https://auth.example.com')
+      request.headers['Authorization'] = "Bearer #{token}"
+
+      get :index
+
+      expect(response).to have_http_status(:ok)
+    end
+
     it 'rejects a revoked token' do
       revoked = token
-      Mcp::Auth::AccessToken.find_by(token: revoked).destroy
+      Mcp::Auth::AccessToken.find_by(token: Mcp::Auth::SecretHashing.digest(revoked)).destroy
       request.headers['Authorization'] = "Bearer #{revoked}"
 
       get :index

@@ -6,6 +6,8 @@ FactoryBot.define do
     redirect_uris { ['http://localhost:3000/callback'] }
     grant_types { %w[authorization_code refresh_token] }
     response_types { ['code'] }
-    scope { 'mcp:read mcp:write' }
+    # nil lets the model default it from the scope registry, so the factory stays
+    # valid whichever scopes a spec registers (unknown scopes are rejected).
+    scope { nil }
   end
 end

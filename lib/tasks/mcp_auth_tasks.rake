@@ -17,6 +17,32 @@ namespace :mcp_auth do
     puts "Cleanup complete!"
   end
 
+  desc "Check that the database schema matches the installed mcp-auth version"
+  task doctor: :environment do
+    missing = Mcp::Auth::SchemaGuard.missing_columns
+    secret_problem = Mcp::Auth::Services::TokenService.oauth_secret_problem
+    healthy = true
+
+    if missing.empty?
+      puts "mcp-auth #{Mcp::Auth::VERSION}: database schema is up to date."
+    else
+      healthy = false
+      warn "mcp-auth #{Mcp::Auth::VERSION}: PENDING MIGRATION"
+      warn "  Missing: #{missing.join(', ')}"
+      warn '  Run: rails g mcp:auth:upgrade && rails db:migrate'
+    end
+
+    if secret_problem
+      # A hard error at token-signing time outside development/test.
+      healthy = false unless Rails.env.development? || Rails.env.test?
+      warn "mcp-auth: signing secret: #{secret_problem}"
+    else
+      puts 'mcp-auth: signing configuration OK.'
+    end
+
+    exit 1 unless healthy
+  end
+
   desc "Show MCP Auth statistics"
   task stats: :environment do
     puts "\nMCP Auth Statistics"
@@ -55,9 +81,14 @@ namespace :mcp_auth do
 
     puts "Revoking all tokens for client: #{client_id}"
 
-    auth_codes = Mcp::Auth::AuthorizationCode.where(client_id: client_id).delete_all
-    access_tokens = Mcp::Auth::AccessToken.where(client_id: client_id).delete_all
-    refresh_tokens = Mcp::Auth::RefreshToken.where(client_id: client_id).delete_all
+    auth_codes = access_tokens = refresh_tokens = 0
+    # Wrap the three deletes in a transaction so a mid-way failure can't leave a
+    # client partially revoked (tokens gone but codes still live, or similar).
+    ActiveRecord::Base.transaction do
+      auth_codes = Mcp::Auth::AuthorizationCode.where(client_id: client_id).delete_all
+      access_tokens = Mcp::Auth::AccessToken.where(client_id: client_id).delete_all
+      refresh_tokens = Mcp::Auth::RefreshToken.where(client_id: client_id).delete_all
+    end
 
     puts "  - Removed #{auth_codes} authorization codes"
     puts "  - Removed #{access_tokens} access tokens"
@@ -77,9 +108,12 @@ namespace :mcp_auth do
 
     puts "Revoking all tokens for user: #{user_id}"
 
-    auth_codes = Mcp::Auth::AuthorizationCode.where(user_id: user_id).delete_all
-    access_tokens = Mcp::Auth::AccessToken.where(user_id: user_id).delete_all
-    refresh_tokens = Mcp::Auth::RefreshToken.where(user_id: user_id).delete_all
+    auth_codes = access_tokens = refresh_tokens = 0
+    ActiveRecord::Base.transaction do
+      auth_codes = Mcp::Auth::AuthorizationCode.where(user_id: user_id).delete_all
+      access_tokens = Mcp::Auth::AccessToken.where(user_id: user_id).delete_all
+      refresh_tokens = Mcp::Auth::RefreshToken.where(user_id: user_id).delete_all
+    end
 
     puts "  - Removed #{auth_codes} authorization codes"
     puts "  - Removed #{access_tokens} access tokens"

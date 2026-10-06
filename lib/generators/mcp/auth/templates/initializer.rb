@@ -5,14 +5,23 @@ Mcp::Auth.configure do |config|
   # OAUTH CONFIGURATION
   # ============================================================================
 
-  # OAuth secret for signing JWTs
-  # Should be a secure random string in production (use: rails secret)
-  config.oauth_secret = ENV.fetch('MCP_HMAC_SECRET', Rails.application.secret_key_base)
+  # OAuth secret for signing JWTs (HS256). REQUIRED outside development/test and
+  # must be DEDICATED — not Rails.application.secret_key_base, which also signs
+  # your cookies. Generate one with `rails secret`. (Dev/test fall back to
+  # secret_key_base when unset.) Not used with RS256/ES256 signing.
+  config.oauth_secret = ENV['MCP_HMAC_SECRET']
 
   # Authorization server URL (optional - defaults to same as resource server)
   # Set this if you're using a separate authorization server
   # Example: config.authorization_server_url = 'https://auth.example.com'
   config.authorization_server_url = ENV.fetch('MCP_AUTHORIZATION_SERVER_URL', nil)
+
+  # Public origin of the MCP resource server (optional - defaults to the request
+  # origin). The token audience, protected-resource metadata and 401 challenge
+  # are built from it. Set it to pin them against a forged Host header, and
+  # always set it when authorization_server_url points at a different host.
+  # Example: config.mcp_server_url = 'https://api.example.com'
+  config.mcp_server_url = ENV.fetch('MCP_SERVER_URL', nil)
 
   # ============================================================================
   # MCP SERVER CONFIGURATION
@@ -39,6 +48,14 @@ Mcp::Auth.configure do |config|
   config.access_token_lifetime = 3600           # 1 hour
   config.refresh_token_lifetime = 2_592_000     # 30 days
   config.authorization_code_lifetime = 1800     # 30 minutes
+
+  # Refresh-token rotation grace period (seconds). Refresh tokens rotate on every
+  # use and reuse is treated as theft (the whole token family is revoked). Real
+  # MCP clients often fire several refreshes at once when the access token
+  # expires, so a rotated token replayed WITHIN this window is treated as a benign
+  # race (rejected softly, family kept); a replay after it is treated as theft.
+  # Set to 0 to disable the grace and revoke on any replay.
+  config.refresh_token_reuse_grace_period = 10
 
   # ============================================================================
   # USER DATA FETCHER
@@ -79,6 +96,32 @@ Mcp::Auth.configure do |config|
   # Change these if you use different method names (e.g., authenticated_user)
   config.current_user_method = :current_user
   config.current_org_method = :current_org
+
+  # ============================================================================
+  # DYNAMIC CLIENT REGISTRATION (DCR) POLICY
+  # ============================================================================
+
+  # /oauth/register is open (RFC 7591), so restrict where authorization codes can
+  # be sent. Plain http is always rejected except for loopback hosts.
+  #
+  # Restrict registration to known clients (Strings match exactly, Regexps must
+  # match the WHOLE URI, anchored or not; end a pattern with `.*` to allow any
+  # path, e.g. %r{https://app\.example\.com/.*}). nil = any https /
+  # native-scheme URI.
+  # config.allowed_redirect_uri_patterns = [
+  #   %r{\Ahttps://claude\.ai/api/mcp/auth_callback\z},
+  #   %r{\Ahttps://chatgpt\.com/connector_platform_oauth_redirect\z}
+  # ]
+
+  # RFC 8252 loopback redirects (localhost / 127.0.0.1 / [::1], any port).
+  # config.allow_loopback_redirects = true
+
+  # Redirect hosts shown as "verified" on the consent screen; others are flagged
+  # as unverified applications.
+  # config.verified_redirect_hosts = %w[claude.ai chatgpt.com]
+
+  # Reject unknown scopes (registration + /oauth/authorize invalid_scope).
+  # config.strict_scope_validation = true
 
   # ============================================================================
   # SCOPE CONFIGURATION
@@ -195,7 +238,6 @@ Mcp::Auth.configure do |config|
   #        * :required - Whether scope is required (true/false)
   #        * :pre_selected - Whether scope was in the original request
   #    - @authorization_params: Hash of OAuth parameters to preserve
-end
 
   # ============================================================================
   # JWT SIGNING (OPTIONAL)
@@ -213,6 +255,27 @@ end
   # Key rotation: list the previous public key(s) here so already-issued tokens
   # keep verifying and both keys are published at /.well-known/jwks.json:
   # config.token_signing_additional_public_keys = [ENV['MCP_JWT_PREVIOUS_PUBLIC_KEY']]
+
+  # ============================================================================
+  # SECRETS HASHED AT REST — TRANSITIONAL DUAL-READ (OPTIONAL)
+  # ============================================================================
+  #
+  # Access tokens, refresh tokens, authorization codes, and client secrets are
+  # stored as one-way SHA-256 digests. While `secret_dual_read` is true (the
+  # default), a presented value is matched against BOTH its digest and any legacy
+  # PLAINTEXT row not yet backfilled, so this version keeps working before and
+  # while the backfill migration runs.
+  #
+  # Upgrading an existing install: `rails g mcp:auth:upgrade && rails db:migrate`
+  # (additive columns) before deploying; once EVERY server runs this version,
+  # `rails g mcp:auth:hash_secrets && rails db:migrate` hashes existing rows.
+  # Older versions (<= 0.5.0) cannot read hashed rows, so rolling back after that
+  # backfill signs every client out.
+  #
+  # Once every row is hashed, HARDEN by turning it off so plaintext-form matches
+  # are rejected:
+  # config.secret_dual_read = false
+end
 
 # ============================================================================
 # PROTECTING YOUR MCP ENDPOINT (RESOURCE SERVER)

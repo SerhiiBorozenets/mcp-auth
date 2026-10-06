@@ -7,6 +7,219 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-28
+
+Second security-hardening round (audit follow-ups), delivered in two phases.
+Phase 1 — code-level fixes, no migration:
+
+### Security (breaking where noted)
+- **Authorization-code TTL was 30 HOURS, not 30 minutes.** The lifetime (a value
+  in seconds, e.g. `1800`) was applied with `.minutes`. Now applied as seconds,
+  and read from the single canonical config source so configured and default
+  deployments agree. **Breaking:** codes now expire in ~30 min as intended.
+- **Issuer / audience / discovery URLs are pinned to the configured origin.**
+  `iss` and all discovery/JWKS URLs derive from `authorization_server_url`, and
+  the MCP resource (token `aud`, protected-resource metadata, 401 challenge)
+  from the new `mcp_server_url`, instead of the raw request Host — closing a
+  Host/`X-Forwarded-Host` header-injection vector. The two are separate so a
+  deployment with a distinct authorization server keeps its resource on the MCP
+  host. **When unset**, each falls back to the request origin, so the host app
+  MUST restrict permitted hosts via Rails `config.hosts`.
+- **JWT validation hardened.** Access tokens now carry a `token_use` claim and an
+  id_token can no longer be replayed as an access token; decode enforces
+  `required_claims` (`iss`/`aud`/`sub`/`exp`, also checked explicitly so older
+  ruby-jwt versions that ignore that option are covered); `exp` is strict and
+  `nbf` allows a bounded clock-skew leeway;
+  a missing audience is no longer silently accepted.
+- **Confidential-client auth at the token endpoint.** A `client_secret` presented
+  on a code/refresh request is now verified (constant-time); an invalid secret is
+  rejected. (Full *requirement* of a secret for confidential clients lands with
+  the `token_endpoint_auth_method` column in Phase 2.)
+- **Refresh-token rotation is atomic.** Rotation is gated on a conditional delete,
+  so two concurrent redemptions of one refresh token can no longer each mint a
+  new token family.
+- **Consent enforces least privilege.** A client can no longer be granted a scope
+  it never requested; approved scopes are intersected with the requested set
+  (plus the server's registered required scopes). If nothing the user approved
+  was requested, the flow ends with `invalid_scope` instead of falling back to
+  the original request.
+- **A dedicated `oauth_secret` is required outside development/test.** The gem
+  no longer signs HS256 tokens with `Rails.application.secret_key_base` (key
+  separation): an unset secret, or one equal to `secret_key_base`, now raises.
+  The generated initializer no longer falls back to `secret_key_base`, and the
+  unused `MCP_OAUTH_PRIVATE_KEY` engine setting is removed. Dev/test still fall
+  back. **Breaking** — see Upgrade.
+
+Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
+
+### Security
+- **All persisted secrets are now hashed at rest.** Access-token JWTs, refresh
+  tokens, authorization codes, and client secrets are stored as SHA-256 digests
+  (prefixed `sha256$`); a database leak no longer yields usable credentials. The
+  plaintext client secret is returned exactly once at registration; tokens/codes
+  are returned once to the client and matched by digest thereafter.
+- **Dynamic Client Registration rejects unsupported grant/response types**
+  (RFC 7591 §2) instead of storing arbitrary metadata.
+- **Refresh-token reuse detection** (OAuth 2.1 §4.14.2). Rotation now marks the
+  presented token revoked (grouped by a `family_id`) instead of deleting it, so
+  an authenticated client replaying an already-rotated token is detected as theft
+  and the **entire family is revoked — both the refresh tokens and the access
+  tokens already issued to that principal** (immediate cut-off, not left valid
+  until expiry). Client authentication is checked *before* this reaction, so an
+  unauthenticated replay can't trigger family revocation. Rotation is atomic
+  (only the request that flips `revoked_at` wins), superseding the delete-based
+  race fix. The migration backfills a `family_id` for pre-existing tokens so
+  reuse detection covers them too. A configurable **rotation grace period**
+  (`refresh_token_reuse_grace_period`, default 10s) treats a rotated token
+  replayed moments later as a benign concurrent-refresh race (rejected softly,
+  family kept) rather than theft, so well-behaved MCP clients that fire several
+  refreshes when the access token expires aren't logged out.
+- **Access tokens carry a unique `jti`** (RFC 7519) so two tokens issued in the
+  same second for the same principal/scope don't collide on the unique token
+  index (which previously raised on rapid/concurrent refreshes).
+- **Confidential-client authentication is now enforced.** Clients carry a
+  `token_endpoint_auth_method`; a confidential client (`client_secret_basic` /
+  `client_secret_post`) MUST present a valid secret at the token endpoint, while
+  a public client (`none`, the default) relies on PKCE. **Existing clients
+  default to `none`, so nothing that worked before starts requiring a secret** —
+  a client opts into confidential auth explicitly at registration.
+
+- **Refresh rotation and successor issuance are one transaction.** If minting
+  the new tokens fails (or yields no refresh token), the rotation rolls back and
+  the client can retry with the token it holds, instead of being left with no
+  valid refresh token (a forced logout).
+- **`WWW-Authenticate` on a protected-resource 401 can be pinned.** The
+  `resource_metadata` URL derives from `mcp_server_url` when set, so a forged
+  Host header can't steer clients to attacker-controlled metadata.
+- **Dangerous redirect-URI schemes are rejected at registration.**
+  `javascript:`, `data:`, `vbscript:`, `file:`, `about:` and `blob:` are refused
+  even when written with `://` (e.g. `javascript://%0aalert(1)`), which the
+  native-app-scheme check previously let through.
+
+- **The per-user scope policy is enforced at approval.** `validate_scope_for_user`
+  only filtered what the consent screen showed; a user could POST a hidden scope
+  name to `/oauth/approve` and have it granted, and required scopes were re-added
+  even when the policy denied them. The policy now filters the granted set.
+- **OAuth credentials are filtered from logs.** The engine adds `code`,
+  `code_verifier`, `client_secret`, `refresh_token`, `access_token`, `id_token`
+  and `token` to `filter_parameters` (Rails' defaults miss `code` and
+  `code_verifier`), and filters redirects carrying `?code=`.
+- **Token responses are not cacheable** (RFC 6749 §5.1): `Cache-Control: no-store`
+  and `Pragma: no-cache` on token, register, introspect and userinfo.
+- **The consent page can't be framed or read cross-origin.** `X-Frame-Options:
+  DENY` and `frame-ancestors 'none'` on authorize/approve, and CORS headers are no
+  longer sent there (RFC 9700 §2.6); the other endpoints keep CORS.
+
+### Security (DCR hardening)
+- **Redirect-URI policy at registration.** Plain `http` is rejected except for
+  loopback hosts (`localhost`, `127.0.0.1`, `[::1]`, any port; RFC 8252 §7.3);
+  optional `allowed_redirect_uri_patterns` restricts registration to known
+  clients (Regexps must match the whole URI, anchored or not), and
+  `allow_loopback_redirects` can disable loopback. The policy applies to every
+  registered redirect URI regardless of grant types, and `/oauth/authorize`
+  refuses clients that didn't register the `authorization_code` grant.
+  **Breaking:** non-loopback `http://` redirect URIs no longer register.
+- **Unknown scopes are rejected** at registration (`invalid_client_metadata`) and
+  at `/oauth/authorize` (`invalid_scope` redirect, RFC 6749 §4.1.2.1) instead of
+  being stored/echoed or silently dropped. OIDC scopes and `offline_access` are
+  accepted. `strict_scope_validation = false` restores the old narrowing.
+- **`client_name` is sanitized** (control/bidi/zero-width characters stripped,
+  100-char cap) and `client_uri` must be an http(s) URL, since both are
+  attacker-chosen at open registration and shown on the consent page.
+- **Consent screen shows the redirect host** and flags applications whose host
+  isn't in `verified_redirect_hosts` as unverified (loopback is exempt).
+  **Existing installs:** the install generator copied the consent view into
+  your app (`app/views/mcp/auth/consent.html.erb`), and that copy overrides the
+  gem's, so you won't see these additions until you merge them in. Compare
+  your copy with the gem's `lib/generators/mcp/auth/templates/views/consent.html.erb`
+  (the "redirect-info" paragraph and the "Unverified application" box).
+
+### Fixed
+- The generated initializer closed the `Mcp::Auth.configure` block before the
+  JWT-signing and `secret_dual_read` sections, so uncommenting
+  `config.secret_dual_read = false` (as the upgrade generator instructs) raised
+  `NameError` at boot.
+- The secrets-hashing backfill migration processes rows in batches of 1000
+  (keyset-paginated by primary key) instead of loading each table into memory.
+- Re-enabled a dead spec file (`spec/services/authorization_service.rb` →
+  `…_spec.rb`) that RSpec never ran, restoring ~130 lines of coverage.
+- `mcp_auth:revoke_*` rake tasks now delete across the three tables inside a
+  transaction (no partial revocation on mid-way failure).
+
+### Added
+- **`config.mcp_server_url`** — public origin of the MCP resource server. Pins the
+  token audience, protected-resource metadata, and 401 `resource_metadata` URL.
+  Optional (defaults to the request origin); set it whenever
+  `authorization_server_url` points at a different host.
+- **`Mcp::Auth::ProtectedResource.www_authenticate(base_url, error:, description:)`**
+  — the RFC 9728 `WWW-Authenticate` challenge as a plain function, so a Rack
+  middleware guarding `/mcp` can emit the same header the controller concern
+  does (without it, spec-compliant MCP clients can't discover the metadata and
+  re-authorize).
+- **Pending-migration guard.** If the gem is upgraded but its migrations haven't
+  run, mcp-auth now says so instead of failing with a cryptic `unknown attribute`:
+  a clear warning is logged at boot, the OAuth endpoints return an actionable
+  `server_error` ("run a pending migration"), and `rake mcp_auth:doctor` reports
+  schema drift and exits non-zero. Fully guarded — never breaks boot, CI, or
+  `db:*` tasks when the database is absent or unmigrated.
+- **`rails generate mcp:auth:upgrade`** — copies the pending schema migration for
+  an existing install (no initializer/view overwrite prompts, unlike re-running
+  the full install generator); **`rails generate mcp:auth:hash_secrets`** copies
+  the secrets-hashing backfill, run once every server is upgraded.
+- **`config.secret_dual_read`** (default `true`) — transitional dual-read: a
+  presented secret/token/code is matched against both its digest and any legacy
+  plaintext row not yet backfilled, so 0.6.0 keeps working before and during
+  the backfill. It does NOT make older versions read hashed rows (see Upgrade).
+  Set to `false` once every row is hashed to harden.
+
+### Upgrade
+
+Two migrations, applied in **two separate steps** so no server ever sees a
+schema or data format it can't handle:
+
+- `add_mcp_auth_confidential_client_and_reuse`: **additive columns**
+  (`token_endpoint_auth_method` on clients; `family_id` + `revoked_at` on refresh
+  tokens). 0.5.0 ignores them; 0.6.0 **requires** them (its OAuth endpoints
+  return a 500 with a "run a pending migration" message until they exist).
+- `hash_mcp_auth_secrets_at_rest`: a **data backfill** that hashes existing
+  secrets in place. 0.6.0 reads both forms (`secret_dual_read`); **0.5.0 cannot
+  read hashed rows**.
+
+**Before deploying (HS256 users):** set a dedicated `MCP_HMAC_SECRET` (`rails
+secret`). Outside development/test, token signing now fails if `oauth_secret` is
+unset **or equal to `secret_key_base`**, which is exactly what initializers
+generated by earlier versions (`ENV.fetch('MCP_HMAC_SECRET', secret_key_base)`)
+fall back to. Change that line to `config.oauth_secret = ENV['MCP_HMAC_SECRET']`.
+`rake mcp_auth:doctor` and a boot-time warning report the problem. Changing the
+secret invalidates outstanding access tokens (clients refresh); refresh tokens
+are unaffected.
+
+```bash
+bundle update mcp-auth
+
+# Step 1 — schema. Run BEFORE the new code serves traffic (e.g. release phase).
+rails generate mcp:auth:upgrade
+rails db:migrate
+# ...deploy 0.6.0 to every server...
+bin/rails mcp_auth:doctor          # schema + signing-secret check
+
+# Step 2 — once NO server runs <= 0.5.0 (a later deploy is fine):
+rails generate mcp:auth:hash_secrets
+rails db:migrate
+# then: config.secret_dual_read = false
+```
+
+The backfill hashes the plaintext already present in each column, so **existing
+clients and tokens keep working without re-registration** — the client still
+presents its original value and the gem re-hashes it to match. Existing clients
+get `token_endpoint_auth_method = 'none'` (public), so none of them suddenly
+requires a secret.
+
+**During the step-1 rollout** (both versions serving), tokens and codes *issued
+by* 0.6.0 servers are stored hashed, so a 0.5.0 server can't validate them until
+it is replaced; keep that window short. After step 2, rolling back to ≤ 0.5.0
+signs every client out. The hashing backfill is idempotent and irreversible.
+
 ## [0.5.0] - 2026-06-15
 
 Security-hardening release. Closes five OAuth 2.1 / MCP authorization
@@ -196,7 +409,8 @@ keep `HS256` until refresh tokens cycle out.
 - Protected Resource Metadata (RFC 9728)
 - Resource Indicators support (RFC 8707) for token audience binding
 - OpenID Connect Discovery support
-- Automatic middleware for protecting `/mcp/*` routes
+- Opt-in resource-server protection for MCP routes via the
+  `Mcp::Auth::ProtectedResource` concern
 - JWT access tokens with proper audience validation
 - Refresh token rotation for enhanced security
 - Database-backed token storage for revocation support
@@ -215,7 +429,8 @@ keep `HS256` until refresh tokens cycle out.
 - Token audience validation to prevent confused deputy attacks
 - WWW-Authenticate header with resource metadata on 401 responses
 
-[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.3.0...v0.4.0
 [0.3.0]: https://github.com/SerhiiBorozenets/mcp-auth/compare/v0.2.0...v0.3.0

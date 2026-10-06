@@ -2,6 +2,7 @@
 
 require 'mcp/auth/version'
 require 'mcp/auth/engine'
+require 'mcp/auth/secret_hashing'
 require 'mcp/auth/services/token_service'
 require 'mcp/auth/services/authorization_service'
 
@@ -40,7 +41,14 @@ module Mcp
                     :token_signing_private_key,
                     :token_signing_public_key,
                     :token_signing_additional_public_keys,
-                    :token_signing_kid
+                    :token_signing_kid,
+                    :secret_dual_read,
+                    :refresh_token_reuse_grace_period,
+                    :mcp_server_url,
+                    :allowed_redirect_uri_patterns,
+                    :allow_loopback_redirects,
+                    :verified_redirect_hosts,
+                    :strict_scope_validation
 
       # token_signing_algorithm has a validating writer defined below, so only
       # the reader is generated here.
@@ -58,8 +66,22 @@ module Mcp
         @consent_view_path = 'mcp/auth/consent'
         @use_custom_consent_view = false
         @mcp_server_path = '/mcp'
+        # Public origin of the MCP resource server (e.g. 'https://api.example.com').
+        # The token audience, protected-resource metadata and 401 challenge are
+        # built from it. Optional: defaults to the request origin. Set it to pin
+        # these against a forged Host header, and whenever authorization_server_url
+        # points at a different host.
+        @mcp_server_url = nil
         @mcp_docs_url = nil
         @validate_scope_for_user = nil
+        # Refresh-token rotation grace period (seconds). A rotated (revoked)
+        # refresh token replayed WITHIN this window of its rotation is treated as
+        # a benign client race/retry — rejected softly, WITHOUT revoking the
+        # family — because real MCP clients often fire several refreshes at once
+        # when the access token expires. A replay after the window is treated as
+        # genuine reuse/theft and revokes the whole family. Set to 0 to disable
+        # the grace and revoke on any replay.
+        @refresh_token_reuse_grace_period = 10
         # CP-9255 batch 2: JWT signing.
         # Default HS256 keeps existing setups working (shared oauth_secret).
         # Set algorithm to 'RS256' or 'ES256' and provide PEM-encoded keys
@@ -71,6 +93,30 @@ module Mcp
         # for verification and published in the JWKS during key rotation.
         @token_signing_additional_public_keys = []
         @token_signing_kid = nil
+        # Transitional dual-read for the "hash secrets at rest" migration. While
+        # true (the default), a presented secret/token/code is matched against
+        # BOTH its digest and any legacy plaintext row not yet backfilled — this
+        # is what makes the upgrade safe under rolling deploys and safe to roll
+        # back. Set to false once every row is hashed (the backfill migration has
+        # run and no old code remains) to reject plaintext-form matches.
+        @secret_dual_read = true
+        # Dynamic Client Registration redirect-URI policy. Registration is open
+        # (RFC 7591), so a rogue client could register an attacker-controlled
+        # redirect_uri and phish a user into approving it on the genuine consent
+        # page. Plain http is ALWAYS rejected except for loopback hosts. Set
+        # allowed_redirect_uri_patterns (Strings, matched exactly, or Regexps)
+        # to additionally restrict registration to known clients; nil keeps any
+        # https / native-scheme URI. Loopback (localhost, 127.0.0.1, [::1], any
+        # port; RFC 8252 §7.3) is allowed unless allow_loopback_redirects is false.
+        @allowed_redirect_uri_patterns = nil
+        @allow_loopback_redirects = true
+        # Redirect hosts shown as "verified" on the consent screen (exact host or
+        # '*.example.com'); any other host is flagged as unverified.
+        @verified_redirect_hosts = []
+        # true: unknown scopes are rejected (invalid_client_metadata at
+        # registration, invalid_scope at /oauth/authorize). false: silently
+        # dropped, the pre-0.6.0 behavior.
+        @strict_scope_validation = true
       end
 
       def token_signing_algorithm=(value)
@@ -139,8 +185,9 @@ module Mcp
   end
 end
 
-# Loaded after the module body so they can reference Mcp::Auth::Configuration
-# and Mcp::Auth::ControllerHelpers defined above. The services are already
-# required at the top of this file.
+# Loaded after the module body so they can reference Mcp::Auth::Configuration,
+# Mcp::Auth::ControllerHelpers, and Mcp::Auth::Error defined above. The services
+# are already required at the top of this file.
 require 'mcp/auth/scope_registry'
 require 'mcp/auth/protected_resource'
+require 'mcp/auth/schema_guard'

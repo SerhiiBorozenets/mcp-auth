@@ -29,6 +29,18 @@ module Mcp
           migration_template "create_refresh_tokens.rb.erb",
                              "db/migrate/create_mcp_auth_refresh_tokens.rb",
                              migration_version: migration_version
+
+          # Hashes secrets at rest. On a fresh install this runs against empty
+          # tables (a no-op). Existing installs upgrade with mcp:auth:upgrade and,
+          # later, mcp:auth:hash_secrets instead of re-running this generator.
+          migration_template "hash_mcp_auth_secrets_at_rest.rb.erb",
+                             "db/migrate/hash_mcp_auth_secrets_at_rest.rb",
+                             migration_version: migration_version
+
+          # Confidential-client auth method + refresh-token reuse-detection columns.
+          migration_template "add_mcp_auth_confidential_client_and_reuse.rb.erb",
+                             "db/migrate/add_mcp_auth_confidential_client_and_reuse.rb",
+                             migration_version: migration_version
         end
 
         def copy_initializer
@@ -56,7 +68,7 @@ module Mcp
           say "MCP Auth has been installed!", :green
           say "="*80
           say "\nFiles created:"
-          say "  - db/migrate/*_create_mcp_auth_*.rb (4 migrations)"
+          say "  - db/migrate/*_mcp_auth_*.rb (6 migrations)"
           say "  - config/initializers/mcp_auth.rb"
           say "  - app/views/mcp/auth/consent.html.erb"
           say "\nNext steps:"

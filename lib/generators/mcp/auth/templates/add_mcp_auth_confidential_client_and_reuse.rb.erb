@@ -1,0 +1,39 @@
+class AddMcpAuthConfidentialClientAndReuse < ActiveRecord::Migration<%= migration_version %>
+  # Adds columns for:
+  #   * confidential-client authentication — `token_endpoint_auth_method` on
+  #     clients. Existing rows default to 'none' (public / PKCE), so no already-
+  #     registered client is suddenly required to send a secret — a client opts
+  #     into confidential auth explicitly at (re-)registration.
+  #   * refresh-token reuse detection — `family_id` groups a rotation chain and
+  #     `revoked_at` marks a consumed token, so replaying a rotated token is
+  #     detected and the whole family is revoked.
+  def up
+    add_column :mcp_auth_oauth_clients, :token_endpoint_auth_method, :string,
+               null: false, default: 'none'
+
+    add_column :mcp_auth_refresh_tokens, :family_id, :string
+    add_column :mcp_auth_refresh_tokens, :revoked_at, :datetime
+    add_index  :mcp_auth_refresh_tokens, :family_id
+
+    # Backfill a distinct family per existing refresh token. Without this, legacy
+    # tokens keep family_id = NULL, and reuse detection can't revoke their family
+    # (revoke_refresh_family(nil) is a no-op) — so a token stolen before its first
+    # rotation couldn't cut off the successor. One family-per-token is correct:
+    # each pre-existing token is the root of its own future rotation chain.
+    say_with_time 'Backfilling refresh-token family_id' do
+      count = 0
+      select_all('SELECT id FROM mcp_auth_refresh_tokens WHERE family_id IS NULL').each do |row|
+        execute("UPDATE mcp_auth_refresh_tokens SET family_id = #{quote(SecureRandom.uuid)} WHERE id = #{quote(row['id'])}")
+        count += 1
+      end
+      count
+    end
+  end
+
+  def down
+    remove_index  :mcp_auth_refresh_tokens, :family_id
+    remove_column :mcp_auth_refresh_tokens, :revoked_at
+    remove_column :mcp_auth_refresh_tokens, :family_id
+    remove_column :mcp_auth_oauth_clients, :token_endpoint_auth_method
+  end
+end
