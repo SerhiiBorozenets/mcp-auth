@@ -121,11 +121,11 @@ module Mcp
       # We reject scheme-only values (e.g. `javascript:`/`data:`) that would be
       # XSS-redirect vectors, while still allowing http(s) and native app schemes.
       def validate_redirect_uris
-        return unless Array(grant_types).include?('authorization_code')
-
         uris = Array(redirect_uris)
         if uris.empty?
-          errors.add(:redirect_uris, 'must include at least one redirect URI')
+          if Array(grant_types).include?('authorization_code')
+            errors.add(:redirect_uris, 'must include at least one redirect URI')
+          end
           return
         end
 
@@ -154,9 +154,11 @@ module Mcp
 
       # OAuth 2.1 / RFC 9700 §4.1.1: redirect URIs must be https, or http only on
       # a loopback host; and, when configured, must match the allowlist.
+      # Runs for EVERY registered redirect URI, whatever the grant types: a client
+      # registered without authorization_code must not be able to slip an
+      # off-policy URI past this check. (/oauth/authorize also refuses clients
+      # that didn't register the authorization_code grant.)
       def validate_redirect_uri_policy
-        return unless Array(grant_types).include?('authorization_code')
-
         Array(redirect_uris).each do |uri|
           next unless valid_redirect_uri_format?(uri) # already reported
 
@@ -164,7 +166,7 @@ module Mcp
           loopback = loopback_redirect?(parsed)
           if parsed.is_a?(URI::HTTP) && !parsed.is_a?(URI::HTTPS) && !loopback
             errors.add(:redirect_uris, "must use https (http is only allowed for loopback): #{uri}")
-          elsif loopback && !config_value(:allow_loopback_redirects, true)
+          elsif loopback && config_value(:allow_loopback_redirects, true) == false
             errors.add(:redirect_uris, "loopback redirect URIs are not allowed: #{uri}")
           elsif !loopback && !redirect_uri_allowlisted?(uri)
             errors.add(:redirect_uris, "is not an allowed redirect URI: #{uri}")
@@ -180,7 +182,15 @@ module Mcp
         patterns = config_value(:allowed_redirect_uri_patterns, nil)
         return true if patterns.nil?
 
-        Array(patterns).any? { |pat| pat.is_a?(Regexp) ? pat.match?(uri.to_s) : pat.to_s == uri.to_s }
+        Array(patterns).any? { |pat| pat.is_a?(Regexp) ? full_match?(pat, uri.to_s) : pat.to_s == uri.to_s }
+      end
+
+      # A Regexp must match the WHOLE URI, even if the operator forgot \A/\z —
+      # otherwise %r{https://claude\.ai/cb} would accept
+      # https://evil.example/?x=https://claude.ai/cb.
+      def full_match?(pattern, string)
+        match = pattern.match(string)
+        !match.nil? && match.begin(0).zero? && match.end(0) == string.length
       end
 
       # Reject (strict) or narrow (non-strict) scopes the server doesn't know, so
@@ -191,7 +201,7 @@ module Mcp
         unknown = Mcp::Auth::ScopeRegistry.unknown_scopes(scope)
         return if unknown.empty?
 
-        if config_value(:strict_scope_validation, true)
+        if config_value(:strict_scope_validation, true) != false
           errors.add(:scope, "contains unsupported scope(s): #{unknown.join(' ')}")
         else
           self.scope = (scope.split - unknown).join(' ')
@@ -207,6 +217,8 @@ module Mcp
         errors.add(:client_uri, 'must be an http(s) URL')
       end
 
+      # Boolean settings are compared against an explicit `false` by the callers,
+      # so nil (unset) means the documented default — matching the controller.
       def config_value(key, default)
         config = Mcp::Auth.configuration
         config.respond_to?(key) ? config.public_send(key) : default

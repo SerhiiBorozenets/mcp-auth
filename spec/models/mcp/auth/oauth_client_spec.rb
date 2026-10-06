@@ -154,6 +154,35 @@ RSpec.describe Mcp::Auth::OauthClient, type: :model do
       expect(described_class.new(attrs)).not_to be_valid
     end
 
+    it 'applies the redirect policy even when the client did not register authorization_code' do
+      refresh_only = attrs.merge(grant_types: %w[refresh_token])
+
+      expect(described_class.new(refresh_only.merge(redirect_uris: ['http://evil.example/cb']))).not_to be_valid
+
+      allow(Mcp::Auth.configuration).to receive(:allowed_redirect_uri_patterns)
+        .and_return(['https://claude.ai/api/mcp/auth_callback'])
+      expect(described_class.new(refresh_only.merge(redirect_uris: ['https://evil.example/cb']))).not_to be_valid
+    end
+
+    it 'requires an allowlist Regexp to match the WHOLE URI, even when not anchored' do
+      allow(Mcp::Auth.configuration).to receive(:allowed_redirect_uri_patterns)
+        .and_return([%r{https://claude\.ai/api/mcp/auth_callback}])
+
+      expect(described_class.new(attrs.merge(redirect_uris: ['https://claude.ai/api/mcp/auth_callback']))).to be_valid
+      %w[https://evil.example/?x=https://claude.ai/api/mcp/auth_callback
+         https://claude.ai/api/mcp/auth_callback.evil.example].each do |uri|
+        expect(described_class.new(attrs.merge(redirect_uris: [uri]))).not_to be_valid, uri
+      end
+    end
+
+    it 'treats unset (nil) policy settings as their documented defaults' do
+      allow(Mcp::Auth.configuration).to receive(:allow_loopback_redirects).and_return(nil)
+      allow(Mcp::Auth.configuration).to receive(:strict_scope_validation).and_return(nil)
+
+      expect(described_class.new(attrs.merge(redirect_uris: ['http://localhost:1/cb']))).to be_valid
+      expect(described_class.new(attrs.merge(scope: 'mcp:read admin'))).not_to be_valid
+    end
+
     it 'rejects unknown scopes when strict, and narrows them when not' do
       expect(described_class.new(attrs.merge(scope: 'mcp:read admin *'))).not_to be_valid
 

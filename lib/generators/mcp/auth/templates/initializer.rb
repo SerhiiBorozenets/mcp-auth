@@ -104,8 +104,10 @@ Mcp::Auth.configure do |config|
   # /oauth/register is open (RFC 7591), so restrict where authorization codes can
   # be sent. Plain http is always rejected except for loopback hosts.
   #
-  # Restrict registration to known clients (Strings match exactly, Regexps match
-  # the full URI). nil = any https / native-scheme URI.
+  # Restrict registration to known clients (Strings match exactly, Regexps must
+  # match the WHOLE URI, anchored or not; end a pattern with `.*` to allow any
+  # path, e.g. %r{https://app\.example\.com/.*}). nil = any https /
+  # native-scheme URI.
   # config.allowed_redirect_uri_patterns = [
   #   %r{\Ahttps://claude\.ai/api/mcp/auth_callback\z},
   #   %r{\Ahttps://chatgpt\.com/connector_platform_oauth_redirect\z}

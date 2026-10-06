@@ -285,6 +285,26 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       expect(response.location).to include('error=invalid_scope')
     end
 
+    it 'never issues a code to a client that did not register the authorization_code grant' do
+      refresh_only = create(:oauth_client, grant_types: %w[refresh_token],
+                                           redirect_uris: ['http://localhost:3000/callback'])
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      post :approve, params: base_params.merge(client_id: refresh_only.client_id, approved: 'true', scopes: ['mcp:read'])
+
+      expect(response).to have_http_status(:bad_request)
+      expect(Mcp::Auth::AuthorizationCode.count).to eq(0)
+    end
+
+    it 'treats an unset (nil) strict_scope_validation as strict, like registration does' do
+      allow(Mcp::Auth.configuration).to receive(:strict_scope_validation).and_return(nil)
+      allow(controller).to receive(:mcp_current_user).and_return(user)
+
+      get :authorize, params: base_params.merge(scope: 'mcp:read admin')
+
+      expect(response.location).to include('error=invalid_scope')
+    end
+
     it 'sends anti-framing headers and no CORS on the consent page (RFC 9700 §2.6)' do
       allow(controller).to receive(:mcp_current_user).and_return(user)
 
@@ -343,7 +363,7 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
 
     it 'rejects redirect URIs outside a configured allowlist' do
       allow(Mcp::Auth.configuration).to receive(:allowed_redirect_uri_patterns)
-        .and_return([%r{\Ahttps://claude\.ai/}])
+        .and_return([%r{https://claude\.ai/.*}]) # whole-URI match; `.*` allows any path
 
       post :register, params: { client_name: 'X', redirect_uris: ['https://attacker.example.com/cb'] }
       expect(response).to have_http_status(:bad_request)

@@ -114,8 +114,11 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
 - **Redirect-URI policy at registration.** Plain `http` is rejected except for
   loopback hosts (`localhost`, `127.0.0.1`, `[::1]`, any port; RFC 8252 §7.3);
   optional `allowed_redirect_uri_patterns` restricts registration to known
-  clients, and `allow_loopback_redirects` can disable loopback. **Breaking:**
-  non-loopback `http://` redirect URIs no longer register.
+  clients (Regexps must match the whole URI, anchored or not), and
+  `allow_loopback_redirects` can disable loopback. The policy applies to every
+  registered redirect URI regardless of grant types, and `/oauth/authorize`
+  refuses clients that didn't register the `authorization_code` grant.
+  **Breaking:** non-loopback `http://` redirect URIs no longer register.
 - **Unknown scopes are rejected** at registration (`invalid_client_metadata`) and
   at `/oauth/authorize` (`invalid_scope` redirect, RFC 6749 §4.1.2.1) instead of
   being stored/echoed or silently dropped. OIDC scopes and `offline_access` are
@@ -125,6 +128,11 @@ Phase 2 — secrets hashed at rest (adds a migration) + medium fixes:
   attacker-chosen at open registration and shown on the consent page.
 - **Consent screen shows the redirect host** and flags applications whose host
   isn't in `verified_redirect_hosts` as unverified (loopback is exempt).
+  **Existing installs:** the install generator copied the consent view into
+  your app (`app/views/mcp/auth/consent.html.erb`), and that copy overrides the
+  gem's, so you won't see these additions until you merge them in. Compare
+  your copy with the gem's `lib/generators/mcp/auth/templates/views/consent.html.erb`
+  (the "redirect-info" paragraph and the "Unverified application" box).
 
 ### Fixed
 - The generated initializer closed the `Mcp::Auth.configure` block before the

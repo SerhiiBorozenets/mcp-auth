@@ -37,6 +37,14 @@ RSpec.describe 'mcp-auth generators' do
       .to contain_exactly('hash_mcp_auth_secrets_at_rest.rb')
   end
 
+  it 'install copies a consent view that shows the redirect host and the unverified warning' do
+    run_generator(Mcp::Auth::Generators::InstallGenerator)
+    view = File.read(File.join(@dir, 'app/views/mcp/auth/consent.html.erb'))
+
+    expect(view).to include('@redirect_host')
+    expect(view).to include('Unverified application')
+  end
+
   it 'upgrade is idempotent' do
     run_generator(Mcp::Auth::Generators::UpgradeGenerator)
 

@@ -226,23 +226,32 @@ module Mcp
         "#{resource_origin}#{path.chomp('/')}"
       end
 
-      # OAuth 2.1 / RFC 6749 §3.1.2.3: the authorization endpoint MUST reject any
-      # redirect_uri that is not pre-registered for the client. This is the gate
-      # that prevents authorization-code interception via open redirect, so it is
-      # validated BEFORE the code is ever issued — and on failure we render an
-      # error instead of redirecting (we must never redirect to an unverified URI).
+      # With strict_scope_validation (the default; only an explicit false turns it
+      # off), a request naming a scope the server doesn't know is refused.
       def unsupported_scope_requested?
-        return false unless Mcp::Auth.configuration&.strict_scope_validation != false
+        return false if Mcp::Auth.configuration&.strict_scope_validation == false
 
         unknown = Mcp::Auth::ScopeRegistry.unknown_scopes(params[:scope].to_s)
         Rails.logger.warn "[OAuth] Rejected unsupported scope(s): #{unknown.join(' ')}" if unknown.any?
         unknown.any?
       end
 
+      # OAuth 2.1 / RFC 6749 §3.1.2.3: the authorization endpoint MUST reject any
+      # redirect_uri that is not pre-registered for the client. This is the gate
+      # that prevents authorization-code interception via open redirect, so it is
+      # validated BEFORE the code is ever issued — and on failure we render an
+      # error instead of redirecting (we must never redirect to an unverified URI).
+      # A client that did not register the authorization_code grant never gets
+      # a code (RFC 7591 §2: the server must honor registered grant types).
       def registered_client_with_valid_redirect?
         client = oauth_client
         unless client
           Rails.logger.warn "[OAuth] Unknown client_id: #{params[:client_id]}"
+          return false
+        end
+
+        unless client.supports_grant_type?('authorization_code')
+          Rails.logger.warn "[OAuth] Client not registered for authorization_code: #{params[:client_id]}"
           return false
         end
 
