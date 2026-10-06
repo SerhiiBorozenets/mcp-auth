@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-06
+
+### Security
+- **Refresh tokens issued before the upgrade are linked to their successor's
+  family on rotation.** A token created by 0.5.x has no `family_id` until the
+  backfill runs. If one was rotated first, its successor started a new family
+  while the rotated token kept `family_id = NULL` (or later got an unrelated id
+  from the backfill), so replaying it could not revoke the successor: reuse
+  detection silently did nothing for that chain. Rotation now stamps the
+  successor's family on a family-less token in the same atomic update, so reuse
+  detection works for upgraded tokens regardless of when the backfill runs. An
+  existing family is never changed. `TokenService.rotate_refresh_token` takes an
+  optional `family_id:` (backwards compatible).
+
+### Documentation
+- README corrected for 0.6.0: endpoints must opt in with
+  `Mcp::Auth::ProtectedResource` (nothing is protected automatically), and the
+  test and custom-consent examples now work. Scopes, the client registration
+  policy, RS256/ES256 signing and `rake mcp_auth:doctor` are documented.
+
 ## [0.6.0] - 2026-09-28
 
 Second security-hardening round (audit follow-ups), delivered in two phases.

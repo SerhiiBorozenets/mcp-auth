@@ -192,10 +192,18 @@ module Mcp
           # Atomically consume a refresh token by flipping revoked_at from NULL.
           # Returns true only for the request that actually performed the flip, so
           # concurrent redemptions of the same token can't both rotate.
-          def rotate_refresh_token(record)
+          #
+          # A token with no family yet (issued before family_id existed and not
+          # backfilled) is stamped with `family_id`, the family its successor is
+          # issued in, in the same atomic update: otherwise a later replay of it
+          # would find no family to revoke. An existing family is never changed.
+          def rotate_refresh_token(record, family_id: nil)
+            changes = { revoked_at: Time.current }
+            changes[:family_id] = family_id if record.family_id.blank? && family_id.present?
+
             Mcp::Auth::RefreshToken
               .where(id: record.id, revoked_at: nil)
-              .update_all(revoked_at: Time.current) == 1
+              .update_all(changes) == 1
           end
 
           # Revoke every still-live token in a family (used on reuse detection).
