@@ -301,4 +301,36 @@ RSpec.describe Mcp::Auth::Services::TokenService do
       expect(response).not_to have_key(:id_token)
     end
   end
+
+  describe '.rotate_refresh_token' do
+    let(:record) { create(:refresh_token, oauth_client: oauth_client) }
+
+    it 'stamps the given family on a token that has none' do
+      record.update_columns(family_id: nil)
+
+      expect(described_class.rotate_refresh_token(record, family_id: 'fam-1')).to be(true)
+      expect(record.reload.family_id).to eq('fam-1')
+      expect(record.revoked_at).to be_present
+    end
+
+    it 'never changes an existing family' do
+      original = record.family_id
+
+      described_class.rotate_refresh_token(record, family_id: 'other')
+
+      expect(record.reload.family_id).to eq(original)
+    end
+
+    it 'still works without a family_id argument' do
+      expect(described_class.rotate_refresh_token(record)).to be(true)
+      expect(record.reload.revoked_at).to be_present
+    end
+
+    it 'returns false for an already rotated token and leaves it alone' do
+      record.update_columns(family_id: nil, revoked_at: 1.minute.ago)
+
+      expect(described_class.rotate_refresh_token(record, family_id: 'fam-1')).to be(false)
+      expect(record.reload.family_id).to be_nil
+    end
+  end
 end

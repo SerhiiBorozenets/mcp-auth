@@ -462,16 +462,21 @@ module Mcp
         scope = record.scope
         scope = narrow_scope(scope, params[:scope]) if params[:scope].present?
 
+        # A token issued before family_id existed (or not yet backfilled) starts its
+        # family here, and the rotation stamps the same id on it, so replaying it
+        # later revokes this successor's family instead of nothing.
+        family_id = record.family_id.presence || SecureRandom.uuid
+
         token_data = {
           client_id: record.client_id, scope: scope, user_id: record.user_id,
-          org_id: record.org_id, family_id: record.family_id,
+          org_id: record.org_id, family_id: family_id,
           resource: params[:resource].presence || canonical_resource_identifier
         }
 
         outcome = nil
         token_response = nil
         Mcp::Auth::RefreshToken.transaction do
-          unless Services::TokenService.rotate_refresh_token(record)
+          unless Services::TokenService.rotate_refresh_token(record, family_id: family_id)
             outcome = :lost_race
             raise ActiveRecord::Rollback
           end

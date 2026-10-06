@@ -653,6 +653,41 @@ RSpec.describe Mcp::Auth::OauthController, type: :controller do
       end
     end
 
+    context 'with a token issued before family_id existed (family_id NULL)' do
+      before { refresh.update_columns(family_id: nil) }
+
+      it 'stamps the successor family on the rotated token' do
+        post :token, params: {
+          grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+        }
+
+        expect(response).to have_http_status(:ok)
+        refresh.reload
+        expect(refresh.revoked_at).to be_present
+        expect(refresh.family_id).to be_present
+        expect(Mcp::Auth::RefreshToken.where(family_id: refresh.family_id, revoked_at: nil).count).to eq(1)
+      end
+
+      it 'revokes the successor when the rotated legacy token is replayed after the grace window' do
+        post :token, params: {
+          grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+        }
+        successor_raw = JSON.parse(response.body)['refresh_token']
+
+        travel(1.minute) do
+          post :token, params: {
+            grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
+          }
+          expect(JSON.parse(response.body)['error']).to eq('invalid_grant')
+
+          post :token, params: {
+            grant_type: 'refresh_token', refresh_token: successor_raw, client_id: client.client_id
+          }
+          expect(response).to have_http_status(:bad_request)
+        end
+      end
+    end
+
     it 'tolerates a replay WITHIN the grace window without revoking the family (concurrent-refresh race)' do
       post :token, params: {
         grant_type: 'refresh_token', refresh_token: refresh.plaintext_token, client_id: client.client_id
