@@ -4,7 +4,7 @@ OAuth 2.1 authorization for Model Context Protocol (MCP) servers in Rails applic
 
 ## What is MCP Authorization?
 
-The Model Context Protocol (MCP) is an open standard that enables AI assistants to securely connect to external data sources and tools. MCP Auth implements the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization), providing OAuth 2.1-based authentication for MCP servers.
+The Model Context Protocol (MCP) is an open standard that enables AI assistants to securely connect to external data sources and tools. MCP Auth implements the [MCP Authorization specification](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization), providing OAuth 2.1-based authentication for MCP servers.
 
 ### Why OAuth for MCP?
 
@@ -115,7 +115,10 @@ sequenceDiagram
 - ✅ **Token Revocation** - RFC 7009 support
 - ✅ **Token Introspection** - RFC 7662 support
 - ✅ **OpenID Connect** - Basic OIDC Discovery support
-- ✅ **Refresh Token Rotation** - OAuth 2.1 security requirement
+- ✅ **Refresh Token Rotation** - OAuth 2.1 security requirement, with reuse detection
+- ✅ **Secrets Hashed at Rest** - tokens, codes and client secrets stored as SHA-256 digests
+- ✅ **Registration Policy** - https-or-loopback redirect URIs, optional allowlist, unknown scopes rejected
+- ✅ **RS256 / ES256 Signing** - optional asymmetric JWTs with a JWKS endpoint and key rotation
 - ✅ **Fully Configurable** - Paths, URLs, lifetimes, and user data
 - ✅ **Beautiful Consent Screen** - Customizable UI
 
@@ -241,6 +244,10 @@ class ApplicationController < ActionController::Base
 end
 ```
 
+**Login redirect:** when a user who isn't signed in reaches `/oauth/authorize`,
+MCP Auth redirects to `main_app.new_user_session_path`, the route Devise defines.
+Without Devise, define a route with that name that leads to your login page.
+
 ### 4. Set Environment Variables
 
 ```bash
@@ -282,16 +289,35 @@ MCP Auth provides these endpoints automatically:
 
 ### Protecting Your MCP Server
 
-MCP Auth automatically protects routes matching your configured `mcp_server_path`:
+MCP Auth does **not** protect any route by itself. Include the resource-server
+concern in the controller that serves your MCP endpoint:
 
 ```ruby
-# If mcp_server_path = '/mcp'
-# All routes starting with /mcp/* require OAuth tokens
+class McpController < ApplicationController
+  include Mcp::Auth::ProtectedResource
 
-GET /mcp/tools        # Protected ✅
-GET /mcp/resources    # Protected ✅
-GET /mcp/prompts      # Protected ✅
-GET /other/endpoint       # Not protected ❌
+  before_action :authenticate_mcp_token!
+  before_action -> { require_mcp_scope!('mcp:write') }, only: :create
+end
+```
+
+`authenticate_mcp_token!` checks the Bearer token's signature, expiry,
+revocation status and audience (`mcp_server_url` or the request origin, plus
+`mcp_server_path`). On failure it returns a 401 whose `WWW-Authenticate` header
+points MCP clients at the protected-resource metadata (RFC 9728).
+`require_mcp_scope!` returns a 403 `insufficient_scope` when a scope is missing.
+
+If your MCP server is mounted as Rack middleware (not a controller), validate
+the token yourself and build the same header:
+
+```ruby
+payload = Mcp::Auth::Services::TokenService.validate_access_token(
+  token, resource: 'https://example.com/mcp'
+)
+unless payload
+  headers = { 'WWW-Authenticate' => Mcp::Auth::ProtectedResource.www_authenticate('https://example.com') }
+  return [401, headers, ['Unauthorized']]
+end
 ```
 
 ### OAuth 2.1 Authorization Flow
@@ -320,9 +346,16 @@ Response:
   "redirect_uris": ["https://client.example.com/callback"],
   "grant_types": ["authorization_code", "refresh_token"],
   "response_types": ["code"],
-  "scope": "mcp:read mcp:write"
+  "scope": "mcp:read mcp:write",
+  "token_endpoint_auth_method": "none",
+  "client_name": "My MCP Client"
 }
 ```
+
+The `client_secret` is returned only once; only its hash is stored. Clients are
+public (`none`, PKCE only) unless they register `token_endpoint_auth_method` as
+`client_secret_basic` or `client_secret_post`, in which case the token endpoint
+requires the secret.
 
 #### 2. Authorization Request with PKCE
 
@@ -401,7 +434,8 @@ curl -X POST https://example.com/oauth/token \
 
 ### Helper Methods in Controllers
 
-Access authentication data in your controllers:
+These read what `authenticate_mcp_token!` stored for the request, so they are
+only set in controllers that run it (see above):
 
 ```ruby
 class MyController < ApplicationController
@@ -466,63 +500,109 @@ config.mcp_docs_url = 'https://docs.example.com/mcp-api'
 
 ### Custom Consent Screen
 
-Customize the OAuth consent screen to match your branding:
+`rails generate mcp:auth:install` copies the consent page to
+`app/views/mcp/auth/consent.html.erb`. That copy overrides the gem's view, so
+edit it to match your branding. Optionally render it inside your app layout:
 
 ```ruby
-# 1. Enable custom consent view in config/initializers/mcp_auth.rb
-config.use_custom_consent_view = true
-
-# 2. Edit app/views/mcp/auth/consent.html.erb
+# config/initializers/mcp_auth.rb
+config.use_custom_consent_view = true          # render with layout 'application'
+config.consent_view_path = 'mcp/auth/consent'  # the template to render
 ```
 
-Available variables in the view:
+Variables available in the view:
 
-- `@client_name` - Name of the OAuth client requesting access
-- `@requested_scopes` - Array of human-readable scope descriptions
-- `@authorization_params` - OAuth parameters (client_id, redirect_uri, etc.)
+- `@client_name` - Name the client registered (self-asserted; not verified)
+- `@redirect_host` - Host the authorization code will be sent to. **Show it.**
+- `@redirect_verified` / `@redirect_loopback` - Whether that host is in
+  `verified_redirect_hosts`, or is a loopback address
+- `@requested_scopes` - Array of hashes: `:key`, `:name`, `:description`,
+  `:required`, `:pre_selected`
+- `@authorization_params` - OAuth parameters to send back unchanged
 
-Example custom consent view:
+The approve form must POST the user's chosen scopes as `scopes[]` (required
+scopes included) together with `approved=true`; with no scopes the request is
+rejected. A minimal example:
 
 ```erb
-<!DOCTYPE html>
-<html>
-<head>
-  <title>Authorization Request</title>
-  <style>
-    /* Your custom styles */
-  </style>
-</head>
-<body>
-  <div class="consent-container">
-    <h1><%= @client_name %> wants to access your account</h1>
-    
-    <p>This application is requesting permission to:</p>
-    <ul>
-      <% @requested_scopes.each do |scope| %>
-        <li><%= scope %></li>
-      <% end %>
-    </ul>
+<h1><%= @client_name %> wants to access your account</h1>
+<p>You will be sent back to <strong><%= @redirect_host %></strong></p>
+<% unless @redirect_verified || @redirect_loopback %>
+  <p><strong>Unverified application.</strong> Only continue if you started this connection.</p>
+<% end %>
 
-    <%= form_tag oauth_approve_path, method: :post do %>
-      <% @authorization_params.each do |key, value| %>
-        <%= hidden_field_tag key, value %>
-      <% end %>
-      
-      <%= hidden_field_tag :approved, true %>
-      <%= submit_tag "Allow Access", class: "btn-primary" %>
-    <% end %>
+<%= form_with url: oauth_approve_path, method: :post, local: true do |f| %>
+  <% @authorization_params.each do |key, value| %>
+    <%= f.hidden_field key, value: value, id: nil %>
+  <% end %>
+  <% @requested_scopes.each do |scope| %>
+    <label>
+      <%= check_box_tag 'scopes[]', scope[:key], scope[:required] || scope[:pre_selected],
+                        id: nil, disabled: scope[:required] %>
+      <%= scope[:name] %> — <%= scope[:description] %>
+    </label>
+    <%# disabled checkboxes aren't submitted, so send required scopes separately %>
+    <%= hidden_field_tag 'scopes[]', scope[:key], id: nil if scope[:required] %>
+  <% end %>
+  <%= f.button 'Allow', name: 'approved', value: 'true' %>
+<% end %>
 
-    <%= form_tag oauth_approve_path, method: :post do %>
-      <% @authorization_params.each do |key, value| %>
-        <%= hidden_field_tag key, value %>
-      <% end %>
-      
-      <%= hidden_field_tag :approved, false %>
-      <%= submit_tag "Deny", class: "btn-secondary" %>
-    <% end %>
-  </div>
-</body>
-</html>
+<%= form_with url: oauth_approve_path, method: :post, local: true do |f| %>
+  <% @authorization_params.each do |key, value| %>
+    <%= f.hidden_field key, value: value, id: nil %>
+  <% end %>
+  <%= f.hidden_field :approved, value: 'false' %>
+  <%= f.button 'Deny' %>
+<% end %>
+```
+
+### Scopes and Per-User Policy
+
+Register the scopes your MCP server understands (requests naming any other
+scope are rejected unless `strict_scope_validation = false`):
+
+```ruby
+config.register_scope 'mcp:read',  name: 'Read Access',  description: 'Read your data', required: true
+config.register_scope 'mcp:write', name: 'Write Access', description: 'Modify data on your behalf'
+```
+
+To restrict which scopes a given user may grant, set a policy. It hides
+scopes on the consent screen **and** is enforced when the code is issued:
+
+```ruby
+config.validate_scope_for_user = proc do |user, org, scope|
+  scope != 'mcp:admin' || user.admin?
+end
+```
+
+### Client Registration Policy
+
+`/oauth/register` is open (RFC 7591), so limit what a registered client can do:
+
+```ruby
+# Only these redirect URIs can register. Strings match exactly; Regexps must
+# match the WHOLE URI (end with .* to allow any path).
+config.allowed_redirect_uri_patterns = [
+  %r{https://claude\.ai/api/mcp/auth_callback}
+]
+config.allow_loopback_redirects = true             # localhost / 127.0.0.1 / [::1], any port
+config.verified_redirect_hosts = %w[claude.ai]     # others show "Unverified application"
+config.strict_scope_validation = true              # reject unknown scopes
+```
+
+Plain `http://` redirect URIs are always rejected except on loopback hosts.
+
+### Token Signing (RS256 / ES256)
+
+Tokens are signed with HS256 and `oauth_secret` by default. To let other
+services verify tokens without the shared secret, use asymmetric keys. The
+public keys are published at `/.well-known/jwks.json`:
+
+```ruby
+config.token_signing_algorithm = 'RS256' # or 'ES256'
+config.token_signing_private_key = ENV.fetch('MCP_JWT_PRIVATE_KEY')
+# Key rotation: keep previous public keys so issued tokens still verify
+config.token_signing_additional_public_keys = [ENV['MCP_JWT_PREVIOUS_PUBLIC_KEY']].compact
 ```
 
 ### Separate Authorization Server
@@ -573,18 +653,21 @@ RSpec.describe 'MCP API', type: :request do
   let(:user) { create(:user) }
   let(:org) { create(:org) }
   
+  # Request specs use the host www.example.com, and the token audience must
+  # match the resource your controller expects (mcp_server_url, or the request
+  # origin, plus mcp_server_path).
   let(:access_token) do
     token_data = {
       client_id: 'test-client',
       scope: 'mcp:read mcp:write',
       user_id: user.id,
       org_id: org.id,
-      resource: 'http://localhost:3000/mcp'
+      resource: 'http://www.example.com/mcp'
     }
-    
+
     Mcp::Auth::Services::TokenService.generate_access_token(
       token_data,
-      base_url: 'http://localhost:3000'
+      base_url: 'http://www.example.com'
     )
   end
   
@@ -620,6 +703,9 @@ rake mcp_auth:revoke_client_tokens[CLIENT_ID]
 
 # Revoke all tokens for a specific user
 rake mcp_auth:revoke_user_tokens[USER_ID]
+
+# Check the database schema and signing secret (exits non-zero on problems)
+rake mcp_auth:doctor
 ```
 
 ### Scheduled Cleanup
@@ -645,6 +731,9 @@ rails secret
 export MCP_HMAC_SECRET="your-256-bit-secret-here"
 ```
 
+Outside development/test, HS256 signing fails if this secret is unset or equal
+to `secret_key_base`. `rake mcp_auth:doctor` checks it.
+
 ### 2. Always Use HTTPS in Production
 
 ```ruby
@@ -652,7 +741,18 @@ export MCP_HMAC_SECRET="your-256-bit-secret-here"
 config.force_ssl = true
 ```
 
-MCP Auth automatically enforces HTTPS for OAuth endpoints in production.
+MCP Auth rejects plain-HTTP requests to the OAuth endpoints outside development/test.
+
+### Pin Your Public URLs
+
+Discovery metadata, the token issuer and the token audience come from
+`authorization_server_url` and `mcp_server_url`. When they're unset, the request's
+Host header is used, so set them or restrict `config.hosts`:
+
+```ruby
+config.authorization_server_url = 'https://example.com'
+config.mcp_server_url = 'https://example.com'
+```
 
 ### 3. Keep Token Lifetimes Short
 
@@ -660,20 +760,21 @@ MCP Auth automatically enforces HTTPS for OAuth endpoints in production.
 # Recommended settings
 config.access_token_lifetime = 3600        # 1 hour
 config.refresh_token_lifetime = 2_592_000  # 30 days
-config.authorization_code_lifetime = 1800  # 30 minutes
+config.authorization_code_lifetime = 600   # 10 minutes (OAuth 2.1 guidance; default 1800)
 ```
 
 ### 4. Validate Redirect URIs
 
-Only register trusted redirect URIs for your OAuth clients. MCP Auth validates exact URI matches.
+Redirect URIs are matched exactly at `/oauth/authorize`. Restrict which ones can
+register with `allowed_redirect_uri_patterns` (see Client Registration Policy).
 
 ### 5. Monitor Failed Authentications
 
 Check logs regularly for suspicious activity:
 
 ```bash
-grep "Token validation failed" log/production.log
-grep "Authorization code is invalid" log/production.log
+grep "\[OAuth\] Error" log/production.log           # every OAuth error response
+grep "Refresh-token reuse detected" log/production.log
 ```
 
 ### 6. Implement Rate Limiting
@@ -682,12 +783,30 @@ Use rack-attack or similar to prevent brute force attacks:
 
 ```ruby
 # config/initializers/rack_attack.rb
-Rack::Attack.throttle('oauth/token', limit: 5, period: 1.minute) do |req|
+Rack::Attack.throttle('oauth/token', limit: 20, period: 1.minute) do |req|
   req.ip if req.path == '/oauth/token' && req.post?
+end
+
+# Registration is open, so throttle it hard
+Rack::Attack.throttle('oauth/register', limit: 5, period: 1.hour) do |req|
+  req.ip if req.path == '/oauth/register' && req.post?
+end
+
+Rack::Attack.throttle('oauth/other', limit: 60, period: 1.minute) do |req|
+  req.ip if req.path.start_with?('/oauth/authorize', '/oauth/revoke', '/oauth/introspect')
 end
 ```
 
-### 7. Regular Token Cleanup
+### 7. After Upgrading to 0.6.0
+
+Once `rails g mcp:auth:hash_secrets && rails db:migrate` has run, turn off the
+transitional plaintext lookup:
+
+```ruby
+config.secret_dual_read = false
+```
+
+### 8. Regular Token Cleanup
 
 Run cleanup task daily to remove expired tokens:
 
@@ -736,7 +855,8 @@ resource: 'https://example.com/mcp'  # Must match mcp_server_path
 **Problem**: Valid-looking tokens are rejected
 
 **Solutions**:
-- Check `oauth_secret` is set correctly and consistently
+- Check `oauth_secret` is set correctly and consistently on every server
+- Check `mcp_server_url` (or the request host) and `mcp_server_path` match the token's `aud`
 - Ensure server clocks are synchronized (JWT exp validation is time-sensitive)
 - Verify token hasn't expired (check `exp` claim)
 - Check token audience matches your MCP server
@@ -748,9 +868,10 @@ ruby -rjwt -e "puts JWT.decode('YOUR_TOKEN', nil, false).inspect"
 
 ### "Missing template" Errors
 
-**Problem**: Missing template layouts/mcp_auth or consent view errors
+**Problem**: Missing template errors when the consent screen renders
 
-**Solution**: Run the generator to create views:
+**Solution**: With `use_custom_consent_view = true` the page renders inside your
+`application` layout, so that layout must exist. Otherwise, regenerate the view:
 
 ```bash
 rails generate mcp:auth:install
@@ -803,7 +924,7 @@ MCP Auth implements the following specifications:
 - [RFC 8414](https://datatracker.ietf.org/doc/html/rfc8414) - Authorization Server Metadata
 - [RFC 8707](https://datatracker.ietf.org/doc/html/rfc8707) - Resource Indicators for OAuth 2.0
 - [RFC 9728](https://datatracker.ietf.org/doc/html/rfc9728) - OAuth 2.0 Protected Resource Metadata
-- [MCP Authorization Spec](https://modelcontextprotocol.io/specification/2025-06-18/basic/authorization) - Model Context Protocol Authorization
+- [MCP Authorization Spec](https://modelcontextprotocol.io/specification/2026-07-28/basic/authorization) - Model Context Protocol Authorization
 
 ## Development
 
